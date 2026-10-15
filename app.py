@@ -148,57 +148,66 @@ else:
                 with st.spinner("Querying Open Food Facts database..."):
                     try:
                         url = f"https://world.openfoodfacts.org/api/v0/product/{barcode_input}.json"
-                        res = requests.get(url).json()
+                        # Open Food Facts requires a custom User-Agent header to prevent blocking/HTML errors
+                        headers = {"User-Agent": "SnackVoiceAI - Accessibility App - Student Project"}
+                        res = requests.get(url, headers=headers)
 
-                        if res.get("status") == 1:
-                            product = res.get("product", {})
-                            product_name = product.get("product_name", "Unknown Product")
-                            ingredients = product.get("ingredients_text", product.get("ingredients_text_en", "Ingredients details not available."))
-                            nutrients = product.get("nutriments", {})
-                            calories = nutrients.get("energy-kcal_100g", "Unknown")
+                        if res.status_code == 200:
+                            try:
+                                data = res.json()
+                            except Exception:
+                                data = {}
 
-                            db_prompt = f"""
-                            This product data was retrieved from the database.
-                            Product Name: {product_name}
-                            Ingredients: {ingredients}
-                            Calories per 100g: {calories} kcal
+                            if data.get("status") == 1:
+                                product = data.get("product", {})
+                                product_name = product.get("product_name", "Unknown Product")
+                                ingredients = product.get("ingredients_text", product.get("ingredients_text_en", "Ingredients details not available."))
+                                nutrients = product.get("nutriments", {})
+                                calories = nutrients.get("energy-kcal_100g", "Unknown")
 
-                            Using this information, generate an accessibility-focused summary for consumers in the following format (in English):
-                            PRODUCT NAME: {product_name}
-                            CALORIES & NUTRITION: {calories} kcal per 100g
-                            ALLERGEN WARNING: [Evaluate ingredients for potential allergens like gluten, dairy, nuts]
-                            DIET STATUS: [Evaluate vegan/vegetarian compatibility]
-                            
-                            AUDIO SUMMARY:
-                            [A natural 2-3 sentence audio summary suitable for text-to-speech.]
-                            """
+                                db_prompt = f"""
+                                This product data was retrieved from the database.
+                                Product Name: {product_name}
+                                Ingredients: {ingredients}
+                                Calories per 100g: {calories} kcal
 
-                            ai_res = generate_content_with_retry(
-                                client=client,
-                                model='gemini-3.8-flash',
-                                contents=[db_prompt]
-                            )
+                                Using this information, generate an accessibility-focused summary for consumers in the following format (in English):
+                                PRODUCT NAME: {product_name}
+                                CALORIES & NUTRITION: {calories} kcal per 100g
+                                ALLERGEN WARNING: [Evaluate ingredients for potential allergens like gluten, dairy, nuts]
+                                DIET STATUS: [Evaluate vegan/vegetarian compatibility]
+                                
+                                AUDIO SUMMARY:
+                                [A natural 2-3 sentence audio summary suitable for text-to-speech.]
+                                """
 
-                            full_text = ai_res.text
-                            st.success("Database Match Successful")
-                            st.markdown(full_text)
+                                ai_res = generate_content_with_retry(
+                                    client=client,
+                                    model='gemini-3.8-flash',
+                                    contents=[db_prompt]
+                                )
 
-                            if "AUDIO SUMMARY:" in full_text:
-                                speech_text = full_text.split("AUDIO SUMMARY:")[1].strip()
+                                full_text = ai_res.text
+                                st.success("Database Match Successful")
+                                st.markdown(full_text)
+
+                                if "AUDIO SUMMARY:" in full_text:
+                                    speech_text = full_text.split("AUDIO SUMMARY:")[1].strip()
+                                else:
+                                    speech_text = full_text.replace("*", "").replace("#", "")
+
+                                tts = gTTS(text=speech_text, lang='en')
+                                audio_fp = io.BytesIO()
+                                tts.write_to_fp(audio_fp)
+                                audio_fp.seek(0)
+
+                                st.write("---")
+                                st.audio(audio_fp, format="audio/mp3", autoplay=True)
                             else:
-                                speech_text = full_text.replace("*", "").replace("#", "")
-
-                            tts = gTTS(text=speech_text, lang='en')
-                            audio_fp = io.BytesIO()
-                            tts.write_to_fp(audio_fp)
-                            audio_fp.seek(0)
-
-                            st.write("---")
-                            st.audio(audio_fp, format="audio/mp3", autoplay=True)
-
+                                st.warning("Product not found in database for this barcode. Please use the 'Package Photo' tab to scan via vision.")
                         else:
-                            st.warning("Product not found in database for this barcode. Please use the 'Package Photo' tab to scan via vision.")
+                            st.warning("Database connection failed or returned an invalid status. Please try again.")
                     except Exception as db_err:
-                        st.error(f"Database connection error: {db_err}")
+                        st.error(f"Database error: {db_err}")
             else:
                 st.warning("Please enter a valid barcode number.")
