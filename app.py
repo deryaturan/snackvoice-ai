@@ -4,6 +4,7 @@ from google import genai
 from gtts import gTTS
 import io
 import requests
+import time
 
 # 1. UI Configuration & Responsive Mobile Settings
 st.set_page_config(
@@ -61,7 +62,19 @@ st.markdown("""
 st.title("SnackVoice AI")
 st.caption("Smart Food Package & Barcode Assistant for Accessibility")
 
-# 2. Securely retrieve API Key from Streamlit Secrets (No hardcoding)
+# Helper function with retry mechanism for temporary server overloads (503)
+def generate_content_with_retry(client, model, contents, retries=3, delay=2):
+    for attempt in range(retries):
+        try:
+            return client.models.generate_content(model=model, contents=contents)
+        except Exception as e:
+            if "503" in str(e) and attempt < retries - 1:
+                time.sleep(delay)
+                delay *= 2
+            else:
+                raise e
+
+# 2. Securely retrieve API Key from Streamlit Secrets
 try:
     api_key = st.secrets["GEMINI_API_KEY"]
 except Exception:
@@ -99,7 +112,8 @@ else:
                         [A natural 2-3 sentence summary summarizing the above details, optimized to be read aloud to the user.]
                         """
 
-                        response = client.models.generate_content(
+                        response = generate_content_with_retry(
+                            client=client,
                             model='gemini-3.8-flash',
                             contents=[image, prompt]
                         )
@@ -159,7 +173,8 @@ else:
                             [A natural 2-3 sentence audio summary suitable for text-to-speech.]
                             """
 
-                            ai_res = client.models.generate_content(
+                            ai_res = generate_content_with_retry(
+                                client=client,
                                 model='gemini-3.8-flash',
                                 contents=[db_prompt]
                             )
