@@ -14,7 +14,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# 2. Modern Food-Tech Palette & Enhanced Accessibility CSS
+# 2. Custom Warm Yellow Palette, Typography & Floating Audio Card CSS
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
@@ -22,44 +22,45 @@ st.markdown("""
     html, body, [class*="css"] {
         font-family: 'Plus Jakarta Sans', sans-serif;
         color: #1E292B;
-        background-color: #F9F9F6;
+        background-color: #FDFBF7;
     }
     
     .stApp {
-        background-color: #F9F9F6;
+        background-color: #FDFBF7;
     }
 
     h1 {
         font-weight: 800 !important;
         color: #2F5233 !important;
-        font-size: 2.4rem !important;
+        font-size: 2.6rem !important;
         letter-spacing: -0.02em;
     }
 
     p, .stMarkdown p {
-        font-size: 1.125rem !important;
+        font-size: 1.2rem !important;
         line-height: 1.6 !important;
-        color: #334143;
+        color: #2C3E35;
     }
     
+    /* Modern, Professional Buttons matching brand & logo red accent */
     .stButton>button {
         width: 100%;
-        height: 4em;
-        font-size: 18px !important;
+        height: 4.2em;
+        font-size: 19px !important;
         font-weight: 700;
         background-color: #2F5233;
         color: #FFFFFF;
-        border-radius: 12px;
+        border-radius: 14px;
         border: none;
-        box-shadow: 0 4px 12px rgba(47, 82, 51, 0.2);
+        box-shadow: 0 4px 14px rgba(47, 82, 51, 0.25);
         transition: all 0.2s ease-in-out;
     }
     
     .stButton>button:hover {
-        background-color: #3B683F;
+        background-color: #C0392B;
         color: #FFFFFF;
-        box-shadow: 0 6px 16px rgba(47, 82, 51, 0.3);
-        transform: translateY(-1px);
+        box-shadow: 0 6px 18px rgba(192, 57, 43, 0.3);
+        transform: translateY(-2px);
     }
     
     .stTabs [data-baseweb="tab-list"] {
@@ -68,14 +69,14 @@ st.markdown("""
     }
     
     .stTabs [data-baseweb="tab"] {
-        height: 52px;
-        background-color: #EAECE7;
-        border-radius: 10px;
-        color: #4A5D4E;
+        height: 56px;
+        background-color: #F4EEDC;
+        border-radius: 12px;
+        color: #3B4D3C;
         font-weight: 700;
-        font-size: 16px;
+        font-size: 17px;
         border: none;
-        padding: 0 20px;
+        padding: 0 24px;
     }
     
     .stTabs [aria-selected="true"] {
@@ -84,28 +85,43 @@ st.markdown("""
     }
 
     .stTextInput input {
-        font-size: 18px !important;
-        padding: 14px !important;
-        border-radius: 10px !important;
-        border: 2px solid #D5DBD2 !important;
+        font-size: 19px !important;
+        padding: 15px !important;
+        border-radius: 12px !important;
+        border: 2px solid #E3DCB8 !important;
+        background-color: #FFFFFF !important;
     }
 
-    /* Custom Large Audio Container */
-    .audio-card {
+    /* Floating Pop-up Audio Card fixed at bottom-right */
+    .floating-audio-card {
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        z-index: 99999;
         background: #FFFFFF;
-        padding: 24px;
-        border-radius: 16px;
-        box-shadow: 0 8px 24px rgba(47, 82, 51, 0.08);
-        border: 2px solid #E2E8DE;
-        margin-top: 20px;
-        margin-bottom: 20px;
-        text-align: center;
+        padding: 20px;
+        border-radius: 18px;
+        box-shadow: 0 12px 36px rgba(0, 0, 0, 0.15);
+        border: 2px solid #2F5233;
+        width: 340px;
+        max-width: 90vw;
     }
     </style>
 """, unsafe_allow_html=True)
 
-st.title("SnackVoice AI")
-st.caption("Smart Food Package & Barcode Assistant for Accessibility")
+# App Header layout with Logo and Title
+col_logo, col_title = st.columns([1, 4])
+with col_logo:
+    try:
+        logo_img = Image.open("logo.png")
+        st.image(logo_img, width=90)
+    except Exception:
+        st.markdown("🛡️")
+
+with col_title:
+    st.title("SnackVoice AI")
+
+st.markdown("<p style='font-size: 1.15rem; color: #556B58; margin-top: -10px; margin-bottom: 25px;'>The voice of every snack, right in your hand.</p>", unsafe_allow_html=True)
 
 # Helper function with retry mechanism for temporary server overloads (503)
 def generate_content_with_retry(client, model, contents, retries=3, delay=2):
@@ -119,7 +135,7 @@ def generate_content_with_retry(client, model, contents, retries=3, delay=2):
             else:
                 raise e
 
-# 2. Securely retrieve API Key from Streamlit Secrets
+# Securely retrieve API Key from Streamlit Secrets
 try:
     api_key = st.secrets["GEMINI_API_KEY"]
 except Exception:
@@ -130,8 +146,6 @@ if not api_key:
 else:
     client = genai.Client(api_key=api_key)
 
-    st.write("---")
-    
     tab1, tab2 = st.tabs(["Package Photo", "Barcode / Product Code"])
 
     with tab1:
@@ -178,9 +192,9 @@ else:
                         audio_fp.seek(0)
 
                         st.markdown("""
-                            <div class="audio-card">
-                                <h3 style="color: #2F5233; margin-top: 0; margin-bottom: 10px;">Audio Overview Ready</h3>
-                                <p style="font-size: 15px; color: #556B58; margin-bottom: 15px;">Tap play below to listen to the accessibility summary.</p>
+                            <div class="floating-audio-card">
+                                <h4 style="color: #2F5233; margin-top: 0; margin-bottom: 6px; font-size: 16px;">🔊 Audio Overview Ready</h4>
+                                <p style="font-size: 13px; color: #556B58; margin-bottom: 10px;">Tap play below to listen.</p>
                             </div>
                         """, unsafe_allow_html=True)
                         st.audio(audio_fp, format="audio/mp3", autoplay=True)
@@ -250,9 +264,9 @@ else:
                                 audio_fp.seek(0)
 
                                 st.markdown("""
-                                    <div class="audio-card">
-                                        <h3 style="color: #2F5233; margin-top: 0; margin-bottom: 10px;">Audio Overview Ready</h3>
-                                        <p style="font-size: 15px; color: #556B58; margin-bottom: 15px;">Tap play below to listen to the accessibility summary.</p>
+                                    <div class="floating-audio-card">
+                                        <h4 style="color: #2F5233; margin-top: 0; margin-bottom: 6px; font-size: 16px;">🔊 Audio Overview Ready</h4>
+                                        <p style="font-size: 13px; color: #556B58; margin-bottom: 10px;">Tap play below to listen.</p>
                                     </div>
                                 """, unsafe_allow_html=True)
                                 st.audio(audio_fp, format="audio/mp3", autoplay=True)
