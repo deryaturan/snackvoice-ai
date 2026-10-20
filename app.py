@@ -14,7 +14,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# 2. Warm Yellow Background, Red Accents & Accessibility CSS (No Olive Green)
+# 2. Bright Warm Yellow Background, Red Accents & Accessibility CSS
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
@@ -22,11 +22,11 @@ st.markdown("""
     html, body, [class*="css"] {
         font-family: 'Plus Jakarta Sans', sans-serif;
         color: #1A1A1A;
-        background-color: #FFFDF4;
+        background-color: #FFF8DC;
     }
     
     .stApp {
-        background-color: #FFFDF4;
+        background-color: #FFF8DC;
     }
 
     h1 {
@@ -70,7 +70,7 @@ st.markdown("""
     
     .stTabs [data-baseweb="tab"] {
         height: 56px;
-        background-color: #FDF3E7;
+        background-color: #FAE5D3;
         border-radius: 12px;
         color: #78281F;
         font-weight: 700;
