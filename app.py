@@ -14,47 +14,92 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+# 2. Modern Food-Tech Palette & Enhanced Accessibility CSS
 st.markdown("""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
     
     html, body, [class*="css"] {
-        font-family: 'Inter', sans-serif;
-        color: #0F172A;
+        font-family: 'Plus Jakarta Sans', sans-serif;
+        color: #1E292B;
+        background-color: #F9F9F6;
+    }
+    
+    .stApp {
+        background-color: #F9F9F6;
+    }
+
+    h1 {
+        font-weight: 800 !important;
+        color: #2F5233 !important;
+        font-size: 2.4rem !important;
+        letter-spacing: -0.02em;
+    }
+
+    p, .stMarkdown p {
+        font-size: 1.125rem !important;
+        line-height: 1.6 !important;
+        color: #334143;
     }
     
     .stButton>button {
         width: 100%;
-        height: 3.5em;
-        font-size: 16px !important;
-        font-weight: 600;
-        background-color: #0F172A;
+        height: 4em;
+        font-size: 18px !important;
+        font-weight: 700;
+        background-color: #2F5233;
         color: #FFFFFF;
-        border-radius: 8px;
+        border-radius: 12px;
         border: none;
-        transition: background-color 0.2s;
+        box-shadow: 0 4px 12px rgba(47, 82, 51, 0.2);
+        transition: all 0.2s ease-in-out;
     }
     
     .stButton>button:hover {
-        background-color: #334155;
+        background-color: #3B683F;
         color: #FFFFFF;
+        box-shadow: 0 6px 16px rgba(47, 82, 51, 0.3);
+        transform: translateY(-1px);
     }
     
     .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
+        gap: 12px;
+        background-color: transparent;
     }
     
     .stTabs [data-baseweb="tab"] {
-        height: 42px;
-        background-color: #F1F5F9;
-        border-radius: 6px;
-        color: #475569;
-        font-weight: 600;
+        height: 52px;
+        background-color: #EAECE7;
+        border-radius: 10px;
+        color: #4A5D4E;
+        font-weight: 700;
+        font-size: 16px;
+        border: none;
+        padding: 0 20px;
     }
     
     .stTabs [aria-selected="true"] {
-        background-color: #0F172A !important;
+        background-color: #2F5233 !important;
         color: #FFFFFF !important;
+    }
+
+    .stTextInput input {
+        font-size: 18px !important;
+        padding: 14px !important;
+        border-radius: 10px !important;
+        border: 2px solid #D5DBD2 !important;
+    }
+
+    /* Custom Large Audio Container */
+    .audio-card {
+        background: #FFFFFF;
+        padding: 24px;
+        border-radius: 16px;
+        box-shadow: 0 8px 24px rgba(47, 82, 51, 0.08);
+        border: 2px solid #E2E8DE;
+        margin-top: 20px;
+        margin-bottom: 20px;
+        text-align: center;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -90,7 +135,7 @@ else:
     tab1, tab2 = st.tabs(["Package Photo", "Barcode / Product Code"])
 
     with tab1:
-        st.write("**Capture a Photo of the Product Package or Ingredients List:**")
+        st.markdown("### Capture Product Package or Ingredients List")
         camera_photo = st.camera_input("Activate Camera")
 
         if camera_photo is not None:
@@ -132,15 +177,19 @@ else:
                         tts.write_to_fp(audio_fp)
                         audio_fp.seek(0)
 
-                        st.write("---")
-                        st.write("**Audio Overview:**")
+                        st.markdown("""
+                            <div class="audio-card">
+                                <h3 style="color: #2F5233; margin-top: 0; margin-bottom: 10px;">Audio Overview Ready</h3>
+                                <p style="font-size: 15px; color: #556B58; margin-bottom: 15px;">Tap play below to listen to the accessibility summary.</p>
+                            </div>
+                        """, unsafe_allow_html=True)
                         st.audio(audio_fp, format="audio/mp3", autoplay=True)
 
                     except Exception as e:
                         st.error(f"An error occurred during analysis: {e}")
 
     with tab2:
-        st.write("**Enter Product Barcode Number (Database Lookup):**")
+        st.markdown("### Enter Product Barcode Number")
         barcode_input = st.text_input("Example: 8690504011234 (Product Barcode)")
 
         if st.button("Lookup Product in Database"):
@@ -148,7 +197,6 @@ else:
                 with st.spinner("Querying Open Food Facts database..."):
                     try:
                         url = f"https://world.openfoodfacts.org/api/v0/product/{barcode_input}.json"
-                        # Open Food Facts requires a custom User-Agent header to prevent blocking/HTML errors
                         headers = {"User-Agent": "SnackVoiceAI - Accessibility App - Student Project"}
                         res = requests.get(url, headers=headers)
 
@@ -201,7 +249,12 @@ else:
                                 tts.write_to_fp(audio_fp)
                                 audio_fp.seek(0)
 
-                                st.write("---")
+                                st.markdown("""
+                                    <div class="audio-card">
+                                        <h3 style="color: #2F5233; margin-top: 0; margin-bottom: 10px;">Audio Overview Ready</h3>
+                                        <p style="font-size: 15px; color: #556B58; margin-bottom: 15px;">Tap play below to listen to the accessibility summary.</p>
+                                    </div>
+                                """, unsafe_allow_html=True)
                                 st.audio(audio_fp, format="audio/mp3", autoplay=True)
                             else:
                                 st.warning("Product not found in database for this barcode. Please use the 'Package Photo' tab to scan via vision.")
