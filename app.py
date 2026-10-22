@@ -48,6 +48,13 @@ st.markdown("""
         color: #1A1A1A;
     }
     
+    /* Force logo image container to be large and prominent */
+    [data-testid="stImage"] img {
+        width: 220px !important;
+        max-width: 100% !important;
+        height: auto !important;
+    }
+    
     /* Modern Professional Buttons with Red Gradient / Hover */
     .stButton>button {
         width: 100%;
@@ -127,7 +134,7 @@ col_logo, col_title = st.columns([1, 3])
 with col_logo:
     try:
         logo_img = Image.open("logo.png")
-        st.image(logo_img, width=180)
+        st.image(logo_img)
     except Exception:
         st.markdown("🛡️")
 
@@ -186,7 +193,7 @@ else:
 
                         response = generate_content_with_retry(
                             client=client,
-                            model='gemini-2.5-flash',
+                            model='gemini-3.8-flash',
                             contents=[image, prompt]
                         )
 
@@ -258,7 +265,7 @@ else:
 
                                 ai_res = generate_content_with_retry(
                                     client=client,
-                                    model='gemini-2.5-flash',
+                                    model='gemini-3.8-flash',
                                     contents=[db_prompt]
                                 )
 
