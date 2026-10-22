@@ -50,7 +50,7 @@ st.markdown("""
     
     /* Force logo image container to be large and prominent */
     [data-testid="stImage"] img {
-        width: 220px !important;
+        width: 330px !important;
         max-width: 100% !important;
         height: auto !important;
     }
