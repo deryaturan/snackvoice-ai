@@ -193,7 +193,7 @@ else:
 
                         response = generate_content_with_retry(
                             client=client,
-                            model='gemini-2.5-flash',
+                            model='gemini-3.8-flash',
                             contents=[image, prompt]
                         )
 
@@ -265,7 +265,7 @@ else:
 
                                 ai_res = generate_content_with_retry(
                                     client=client,
-                                    model='gemini-2.5-flash',
+                                    model='gemini-3.8-flash',
                                     contents=[db_prompt]
                                 )
 
