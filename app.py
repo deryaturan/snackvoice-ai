@@ -1,10 +1,9 @@
 import streamlit as st
 from PIL import Image
-from google import genai
+import google.generativeai as genai
 from gtts import gTTS
 import io
 import requests
-import time
 
 # 1. UI Configuration & Responsive Mobile Settings
 st.set_page_config(
@@ -36,7 +35,6 @@ st.markdown("""
         letter-spacing: -0.02em;
     }
 
-    /* Enforce large, high-contrast readable text for labels and headers */
     h3, .stMarkdown h3, label {
         color: #111111 !important;
         font-weight: 700 !important;
@@ -48,14 +46,12 @@ st.markdown("""
         color: #1A1A1A;
     }
     
-    /* Force logo image container to be large and prominent */
     [data-testid="stImage"] img {
-        width: 330px !important;
+        width: 220px !important;
         max-width: 100% !important;
         height: auto !important;
     }
     
-    /* Modern Professional Buttons with Red Gradient / Hover */
     .stButton>button {
         width: 100%;
         height: 4.2em;
@@ -97,7 +93,6 @@ st.markdown("""
         color: #FFFFFF !important;
     }
 
-    /* Text input styling and high-contrast placeholder */
     .stTextInput input {
         font-size: 19px !important;
         padding: 15px !important;
@@ -112,7 +107,6 @@ st.markdown("""
         opacity: 1;
     }
 
-    /* Floating Pop-up Audio Card fixed at bottom-right */
     .floating-audio-card {
         position: fixed;
         bottom: 24px;
@@ -143,19 +137,7 @@ with col_title:
 
 st.markdown("<p style='font-size: 1.15rem; color: #922B21; margin-top: -10px; margin-bottom: 25px;'>The voice of every snack, right in your hand.</p>", unsafe_allow_html=True)
 
-# Helper function with retry mechanism for temporary server overloads (503)
-def generate_content_with_retry(client, model, contents, retries=3, delay=2):
-    for attempt in range(retries):
-        try:
-            return client.models.generate_content(model=model, contents=contents)
-        except Exception as e:
-            if "503" in str(e) and attempt < retries - 1:
-                time.sleep(delay)
-                delay *= 2
-            else:
-                raise e
-
-# Securely retrieve API Key from Streamlit Secrets
+# Securely retrieve API Key from Streamlit Secrets & Configure genai
 try:
     api_key = st.secrets["GEMINI_API_KEY"]
 except Exception:
@@ -164,7 +146,8 @@ except Exception:
 if not api_key:
     st.error("System Error: GEMINI_API_KEY is not configured in Streamlit Secrets.")
 else:
-    client = genai.Client(api_key=api_key)
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel('gemini-1.5-flash')
 
     tab1, tab2 = st.tabs(["Package Photo", "Barcode / Product Code"])
 
@@ -191,13 +174,9 @@ else:
                         [A natural 2-3 sentence summary summarizing the above details, optimized to be read aloud to the user.]
                         """
 
-                        response = generate_content_with_retry(
-                            client=client,
-                            model='gemini-3.8-flash',
-                            contents=[image, prompt]
-                        )
-
+                        response = model.generate_content([image, prompt])
                         full_text = response.text
+
                         st.success("Analysis Completed Successfully")
                         st.markdown(full_text)
 
@@ -263,13 +242,9 @@ else:
                                 [A natural 2-3 sentence audio summary suitable for text-to-speech.]
                                 """
 
-                                ai_res = generate_content_with_retry(
-                                    client=client,
-                                    model='gemini-2.5-flash',
-                                    contents=[db_prompt]
-                                )
-
+                                ai_res = model.generate_content(db_prompt)
                                 full_text = ai_res.text
+
                                 st.success("Database Match Successful")
                                 st.markdown(full_text)
 
