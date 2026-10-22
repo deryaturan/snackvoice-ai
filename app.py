@@ -14,14 +14,14 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# 2. Bright Warm Yellow Background, Red Accents & Accessibility CSS
+# 2. Bright Warm Yellow Background, Red Accents & High Contrast Text CSS
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
     
     html, body, [class*="css"] {
         font-family: 'Plus Jakarta Sans', sans-serif;
-        color: #1A1A1A;
+        color: #111111;
         background-color: #FFF8DC;
     }
     
@@ -36,10 +36,16 @@ st.markdown("""
         letter-spacing: -0.02em;
     }
 
+    /* High contrast readability for all headers and labels */
+    h3, .stMarkdown h3, label {
+        color: #111111 !important;
+        font-weight: 700 !important;
+    }
+
     p, .stMarkdown p {
         font-size: 1.2rem !important;
         line-height: 1.6 !important;
-        color: #2C2C2C;
+        color: #1A1A1A;
     }
     
     /* Modern Professional Buttons with Red Gradient / Hover */
@@ -84,12 +90,19 @@ st.markdown("""
         color: #FFFFFF !important;
     }
 
+    /* Text input styling and placeholder contrast */
     .stTextInput input {
         font-size: 19px !important;
         padding: 15px !important;
         border-radius: 12px !important;
         border: 2px solid #F5B7B1 !important;
         background-color: #FFFFFF !important;
+        color: #111111 !important;
+    }
+    
+    .stTextInput input::placeholder {
+        color: #555555 !important;
+        opacity: 1;
     }
 
     /* Floating Pop-up Audio Card fixed at bottom-right */
@@ -114,7 +127,7 @@ col_logo, col_title = st.columns([1, 3])
 with col_logo:
     try:
         logo_img = Image.open("logo.png")
-        st.image(logo_img, width=140)
+        st.image(logo_img, width=180)
     except Exception:
         st.markdown("🛡️")
 
@@ -173,7 +186,7 @@ else:
 
                         response = generate_content_with_retry(
                             client=client,
-                            model='gemini-3.8-flash',
+                            model='gemini-2.5-flash',
                             contents=[image, prompt]
                         )
 
@@ -245,7 +258,7 @@ else:
 
                                 ai_res = generate_content_with_retry(
                                     client=client,
-                                    model='gemini-3.8-flash',
+                                    model='gemini-2.5-flash',
                                     contents=[db_prompt]
                                 )
 
