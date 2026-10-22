@@ -14,7 +14,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# 2. Bright Warm Yellow Background, Red Accents & High Contrast Text CSS
+# 2. Bright Warm Yellow Background, Red Accents & Enforced CSS Logo Sizing
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
@@ -36,7 +36,7 @@ st.markdown("""
         letter-spacing: -0.02em;
     }
 
-    /* High contrast readability for all headers and labels */
+    /* Enforce large, high-contrast readable text for labels and headers */
     h3, .stMarkdown h3, label {
         color: #111111 !important;
         font-weight: 700 !important;
@@ -46,6 +46,13 @@ st.markdown("""
         font-size: 1.2rem !important;
         line-height: 1.6 !important;
         color: #1A1A1A;
+    }
+    
+    /* Force logo image container to be large and prominent */
+    [data-testid="stImage"] img {
+        width: 220px !important;
+        max-width: 100% !important;
+        height: auto !important;
     }
     
     /* Modern Professional Buttons with Red Gradient / Hover */
@@ -90,7 +97,7 @@ st.markdown("""
         color: #FFFFFF !important;
     }
 
-    /* Text input styling and placeholder contrast */
+    /* Text input styling and high-contrast placeholder */
     .stTextInput input {
         font-size: 19px !important;
         padding: 15px !important;
@@ -122,12 +129,12 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# App Header layout with Larger Logo and Title
+# App Header layout with Logo and Title
 col_logo, col_title = st.columns([1, 3])
 with col_logo:
     try:
         logo_img = Image.open("logo.png")
-        st.image(logo_img, width=180)
+        st.image(logo_img)
     except Exception:
         st.markdown("🛡️")
 
