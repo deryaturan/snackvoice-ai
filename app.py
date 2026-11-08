@@ -14,7 +14,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# 2. Custom CSS Styling (Enlarged Logo 200px & Embedded HTML5 Audio Controls in Floating Box)
+# 2. Custom CSS Styling (Optimized Logo & Embedded HTML5 Audio Controls in Floating Box)
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
@@ -49,9 +49,9 @@ st.markdown("""
         color: #1A1A1A;
     }
     
-    /* Enlarged logo styling to 200px */
+    /* Prominent and balanced logo styling */
     [data-testid="stImage"] img {
-        width: 200px !important;
+        width: 170px !important;
         max-width: 100% !important;
         height: auto !important;
         border-radius: 12px;
@@ -104,8 +104,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Aligned Header Layout with 200px Logo
-col_logo, col_title = st.columns([1.3, 3.7])
+# Aligned Header Layout
+col_logo, col_title = st.columns([1.2, 3.8])
 with col_logo:
     try:
         logo_img = Image.open("logo.png")
@@ -122,10 +122,11 @@ st.markdown("<hr style='border: 1px solid #F5B7B1; margin-top: 15px; margin-bott
 def generate_content_with_retry(client, model, contents, retries=3, delay=1):
     for attempt in range(retries):
         try:
+            # Token limit raised to 800 to ensure complete output generation without truncation
             return client.models.generate_content(
                 model=model, 
                 contents=contents,
-                config={'max_output_tokens': 300}
+                config={'max_output_tokens': 800}
             )
         except Exception as e:
             if "503" in str(e) and attempt < retries - 1:
@@ -161,9 +162,9 @@ else:
                 try:
                     unified_prompt = """
                     You are the "SnackVoice" accessibility assistant for visually impaired consumers.
-                    Analyze this food package image directly. Extract all visible information from the package text, logo, or barcode. Never ask the user to show the back of the package.
+                    Analyze this food package image directly and provide complete details. Extract all visible information from the package text, logo, or barcode. Never ask the user to show the back of the package.
 
-                    Format strictly in English:
+                    Format strictly in English with all sections fully populated:
                     PRODUCT NAME: [Product name]
                     CALORIES & NUTRITION: [Calories/values per 100g or serving]
                     ALLERGEN WARNING: [Check for gluten, dairy, nuts, etc.]
