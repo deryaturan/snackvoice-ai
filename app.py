@@ -4,6 +4,7 @@ from google import genai
 from gtts import gTTS
 import io
 import time
+import base64
 
 # 1. UI Configuration & Page Icon
 st.set_page_config(
@@ -13,7 +14,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# 2. Custom CSS Styling (Enlarged Logo, Floating Audio Widget with Controls)
+# 2. Custom CSS Styling (Enlarged Logo 200px & Embedded HTML5 Audio Controls in Floating Box)
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
@@ -48,9 +49,9 @@ st.markdown("""
         color: #1A1A1A;
     }
     
-    /* Enlarged and vertically centered logo styling */
+    /* Enlarged logo styling to 200px */
     [data-testid="stImage"] img {
-        width: 140px !important;
+        width: 200px !important;
         max-width: 100% !important;
         height: auto !important;
         border-radius: 12px;
@@ -76,14 +77,14 @@ st.markdown("""
         transform: translateY(-2px);
     }
 
-    /* Fixed Bottom-Right Floating Audio Card Wrapper */
+    /* Fixed Bottom-Right Floating Audio Card Wrapper with Embedded Player */
     .floating-audio-card {
         position: fixed;
         bottom: 24px;
         right: 24px;
         z-index: 99999;
         background: #FFFFFF;
-        padding: 14px 18px;
+        padding: 16px 18px;
         border-radius: 20px;
         box-shadow: 0 12px 32px rgba(0, 0, 0, 0.2);
         border: 2px solid #C0392B;
@@ -95,21 +96,16 @@ st.markdown("""
         font-weight: 800;
         color: #C0392B;
         font-size: 15px;
-        margin-bottom: 8px;
+        margin-bottom: 10px;
         display: flex;
         align-items: center;
         gap: 6px;
     }
-    
-    /* Target the Streamlit Audio Player directly to dock inside floating widget */
-    .stAudio {
-        margin-top: -10px !important;
-    }
     </style>
 """, unsafe_allow_html=True)
 
-# Aligned Header Layout with Balanced Larger Logo
-col_logo, col_title = st.columns([1.2, 3.8])
+# Aligned Header Layout with 200px Logo
+col_logo, col_title = st.columns([1.3, 3.7])
 with col_logo:
     try:
         logo_img = Image.open("logo.png")
@@ -126,11 +122,10 @@ st.markdown("<hr style='border: 1px solid #F5B7B1; margin-top: 15px; margin-bott
 def generate_content_with_retry(client, model, contents, retries=3, delay=1):
     for attempt in range(retries):
         try:
-            # Added max_output_tokens=300 for ultra-fast response generation
             return client.models.generate_content(
                 model=model, 
                 contents=contents,
-                config={'max_output_tokens': 350}
+                config={'max_output_tokens': 300}
             )
         except Exception as e:
             if "503" in str(e) and attempt < retries - 1:
@@ -151,17 +146,19 @@ else:
     client = genai.Client(api_key=api_key)
 
     st.markdown("### Smart Package Scanner & Hybrid Analyzer")
-    st.markdown("Capture the snack package or ingredients list. Our single-pass hybrid engine inspects the product, checks global databases, and synthesizes an accessibility summary instantly.")
+    st.markdown("Capture the snack package or ingredients list. Our single-pass hybrid engine inspects the product instantly.")
 
     camera_photo = st.camera_input("Activate Camera for Instant Scan")
 
     if camera_photo is not None:
         image = Image.open(camera_photo)
         
+        # SPEED OPTIMIZATION: Resize image to drastically reduce API upload payload and waiting time
+        image.thumbnail((800, 800))
+        
         if st.button("Analyze with Hybrid AI Engine"):
             with st.spinner("Analyzing package with AI & Database engine..."):
                 try:
-                    # Concise, high-speed unified prompt
                     unified_prompt = """
                     You are the "SnackVoice" accessibility assistant for visually impaired consumers.
                     Analyze this food package image directly. Extract all visible information from the package text, logo, or barcode. Never ask the user to show the back of the package.
@@ -183,8 +180,6 @@ else:
                     )
 
                     full_text = response.text
-                    
-                    # Display structured text analysis directly without unnecessary success banners
                     st.markdown(full_text)
 
                     if "AUDIO SUMMARY:" in full_text:
@@ -192,21 +187,25 @@ else:
                     else:
                         speech_text = full_text.replace("*", "").replace("#", "")
 
-                    # Natural human-like speech generation via gTTS
+                    # Generate Audio and convert to Base64 for embedded HTML player inside floating card
                     tts = gTTS(text=speech_text, lang='en', slow=False)
                     audio_fp = io.BytesIO()
                     tts.write_to_fp(audio_fp)
                     audio_fp.seek(0)
+                    
+                    audio_bytes = audio_fp.getvalue()
+                    audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
 
-                    # Floating Widget UI Card displaying title and containing audio controls
-                    st.markdown("""
+                    # Fully embedded floating audio widget with interactive play/pause controls
+                    st.markdown(f"""
                         <div class="floating-audio-card">
                             <div class="audio-title">🔊 Audio Overview</div>
+                            <audio controls autoplay style="width: 100%; height: 38px;">
+                                <source src="data:audio/mp3;base64,{audio_base64}" type="audio/mp3">
+                                Your browser does not support the audio element.
+                            </audio>
                         </div>
                     """, unsafe_allow_html=True)
-                    
-                    # Streamlit Audio component render (styled by CSS into floating widget)
-                    st.audio(audio_fp, format="audio/mp3", autoplay=True)
 
                 except Exception as e:
                     st.error(f"An error occurred during analysis: {e}")
