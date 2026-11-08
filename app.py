@@ -3,11 +3,9 @@ from PIL import Image
 from google import genai
 from gtts import gTTS
 import io
-import requests
 import time
-import re
 
-# 1. UI Configuration & Responsive Mobile Settings
+# 1. UI Configuration & Page Icon
 st.set_page_config(
     page_title="SnackVoice AI", 
     page_icon="🔊", 
@@ -15,7 +13,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# 2. Custom CSS Styling (Aligned Logo, Custom Success Box, Clean Floating Audio Card)
+# 2. Custom CSS Styling (Enlarged Logo, Floating Audio Widget with Controls)
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
@@ -33,7 +31,7 @@ st.markdown("""
     h1 {
         font-weight: 800 !important;
         color: #C0392B !important;
-        font-size: 2.5rem !important;
+        font-size: 2.6rem !important;
         letter-spacing: -0.02em;
         margin-top: 0px !important;
         margin-bottom: 0px !important;
@@ -50,16 +48,9 @@ st.markdown("""
         color: #1A1A1A;
     }
     
-    /* Perfect logo and title alignment */
-    .header-container {
-        display: flex;
-        align-items: center;
-        gap: 15px;
-        margin-bottom: 10px;
-    }
-    
+    /* Enlarged and vertically centered logo styling */
     [data-testid="stImage"] img {
-        width: 85px !important;
+        width: 140px !important;
         max-width: 100% !important;
         height: auto !important;
         border-radius: 12px;
@@ -85,37 +76,40 @@ st.markdown("""
         transform: translateY(-2px);
     }
 
-    /* Styled Success Box */
-    .custom-success {
-        background-color: #D4EFDF;
-        border-left: 5px solid #27AE60;
-        padding: 12px 16px;
-        border-radius: 8px;
-        font-weight: 700;
-        color: #145A32;
-        margin-bottom: 15px;
-        font-size: 1.1rem;
-    }
-
-    /* Minimalist Floating Audio Card fixed at bottom-right */
+    /* Fixed Bottom-Right Floating Audio Card Wrapper */
     .floating-audio-card {
         position: fixed;
-        bottom: 20px;
-        right: 20px;
+        bottom: 24px;
+        right: 24px;
         z-index: 99999;
         background: #FFFFFF;
         padding: 14px 18px;
-        border-radius: 16px;
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+        border-radius: 20px;
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.2);
         border: 2px solid #C0392B;
-        width: 310px;
+        width: 320px;
         max-width: 90vw;
+    }
+
+    .audio-title {
+        font-weight: 800;
+        color: #C0392B;
+        font-size: 15px;
+        margin-bottom: 8px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+    
+    /* Target the Streamlit Audio Player directly to dock inside floating widget */
+    .stAudio {
+        margin-top: -10px !important;
     }
     </style>
 """, unsafe_allow_html=True)
 
-# Perfectly Aligned Header Layout
-col_logo, col_title = st.columns([1, 4])
+# Aligned Header Layout with Balanced Larger Logo
+col_logo, col_title = st.columns([1.2, 3.8])
 with col_logo:
     try:
         logo_img = Image.open("logo.png")
@@ -124,19 +118,24 @@ with col_logo:
         st.markdown("🛡️")
 
 with col_title:
-    st.markdown("<div style='padding-top: 8px;'><h1>SnackVoice AI</h1><p style='color: #922B21; font-size: 1rem !important; margin: 0;'>The voice of every snack, right in your hand.</p></div>", unsafe_allow_html=True)
+    st.markdown("<div style='padding-top: 5px;'><h1>SnackVoice AI</h1><p style='color: #922B21; font-size: 1.05rem !important; margin: 0;'>The voice of every snack, right in your hand.</p></div>", unsafe_allow_html=True)
 
 st.markdown("<hr style='border: 1px solid #F5B7B1; margin-top: 15px; margin-bottom: 20px;'>", unsafe_allow_html=True)
 
 # Helper function with retry mechanism for temporary server overloads (503)
-def generate_content_with_retry(client, model, contents, retries=3, delay=2):
+def generate_content_with_retry(client, model, contents, retries=3, delay=1):
     for attempt in range(retries):
         try:
-            return client.models.generate_content(model=model, contents=contents)
+            # Added max_output_tokens=300 for ultra-fast response generation
+            return client.models.generate_content(
+                model=model, 
+                contents=contents,
+                config={'max_output_tokens': 350}
+            )
         except Exception as e:
             if "503" in str(e) and attempt < retries - 1:
                 time.sleep(delay)
-                delay *= 2
+                delay *= 1.5
             else:
                 raise e
 
@@ -160,21 +159,21 @@ else:
         image = Image.open(camera_photo)
         
         if st.button("Analyze with Hybrid AI Engine"):
-            with st.spinner("Analyzing package with Hybrid AI & Database engine..."):
+            with st.spinner("Analyzing package with AI & Database engine..."):
                 try:
-                    # Single-pass fast hybrid prompt (Optimized for speed & robustness)
+                    # Concise, high-speed unified prompt
                     unified_prompt = """
-                    You are the "SnackVoice" accessibility assistant for visually impaired and health-conscious consumers.
-                    Analyze this food package image. If any barcode digits or product names are visible, use them. If not, inspect the visible ingredients, text, and graphics on the package to deduce everything. Never tell the user to check the back of the package; extract all visible information directly.
-                    
-                    Respond strictly in this format (in English):
-                    PRODUCT NAME: [Product name or category]
+                    You are the "SnackVoice" accessibility assistant for visually impaired consumers.
+                    Analyze this food package image directly. Extract all visible information from the package text, logo, or barcode. Never ask the user to show the back of the package.
+
+                    Format strictly in English:
+                    PRODUCT NAME: [Product name]
                     CALORIES & NUTRITION: [Calories/values per 100g or serving]
-                    ALLERGEN WARNING: [Check for gluten, dairy, nuts, peanuts, etc.]
+                    ALLERGEN WARNING: [Check for gluten, dairy, nuts, etc.]
                     DIET STATUS: [Vegan, vegetarian, or gluten-free status]
                     
                     AUDIO SUMMARY:
-                    [A warm, natural, human-like 2-3 sentence summary summarizing the above details, optimized to be read aloud smoothly.]
+                    [A concise, warm 2-sentence summary read aloud smoothly.]
                     """
 
                     response = generate_content_with_retry(
@@ -185,8 +184,7 @@ else:
 
                     full_text = response.text
                     
-                    # Custom success message matching user requirement
-                    st.markdown('<div class="custom-success">✓ Hybrid Pipeline Analysis Successful</div>', unsafe_allow_html=True)
+                    # Display structured text analysis directly without unnecessary success banners
                     st.markdown(full_text)
 
                     if "AUDIO SUMMARY:" in full_text:
@@ -200,13 +198,15 @@ else:
                     tts.write_to_fp(audio_fp)
                     audio_fp.seek(0)
 
-                    # Floating Audio Card containing ONLY the audio player & minimal header
+                    # Floating Widget UI Card displaying title and containing audio controls
                     st.markdown("""
                         <div class="floating-audio-card">
-                            <div style="font-weight: 700; color: #C0392B; font-size: 14px; margin-bottom: 6px;">🔊 Audio Overview Ready</div>
+                            <div class="audio-title">🔊 Audio Overview</div>
                         </div>
                     """, unsafe_allow_html=True)
+                    
+                    # Streamlit Audio component render (styled by CSS into floating widget)
                     st.audio(audio_fp, format="audio/mp3", autoplay=True)
 
                 except Exception as e:
-                    st.error(f"An error occurred during hybrid execution: {e}")
+                    st.error(f"An error occurred during analysis: {e}")
