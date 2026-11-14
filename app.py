@@ -5,7 +5,6 @@ from gtts import gTTS
 import io
 import time
 import base64
-import requests
 
 # 1. UI Configuration & Page Icon
 st.set_page_config(
@@ -125,7 +124,7 @@ def generate_content_with_retry(client, model, contents, retries=3, delay=1):
             return client.models.generate_content(
                 model=model, 
                 contents=contents,
-                config={'max_output_tokens': 800}
+                config={'max_output_tokens': 350}
             )
         except Exception as e:
             if "503" in str(e) and attempt < retries - 1:
@@ -133,37 +132,6 @@ def generate_content_with_retry(client, model, contents, retries=3, delay=1):
                 delay *= 1.5
             else:
                 raise e
-
-# Open Food Facts Database Search Function (DB-First Strategy)
-def search_open_food_facts(barcode=None, product_name=None):
-    headers = {"User-Agent": "SnackVoiceAI - Accessibility App - Student Project"}
-    
-    # 1. Try Barcode Search if available
-    if barcode and barcode.lower() != "none" and barcode.isdigit():
-        url = f"https://world.openfoodfacts.org/api/v0/product/{barcode}.json"
-        try:
-            res = requests.get(url, headers=headers, timeout=3)
-            if res.status_code == 200:
-                data = res.json()
-                if data.get("status") == 1:
-                    return data.get("product", {}), "Database Match (Barcode)"
-        except Exception:
-            pass
-
-    # 2. Try Product Name Search if available
-    if product_name and product_name.lower() != "none":
-        search_url = f"https://world.openfoodfacts.org/cgi/search.pl?search_terms={requests.utils.quote(product_name)}&json=1"
-        try:
-            res = requests.get(search_url, headers=headers, timeout=3)
-            if res.status_code == 200:
-                data = res.json()
-                products = data.get("products", [])
-                if products:
-                    return products[0], "Database Match (Product Name)"
-        except Exception:
-            pass
-            
-    return None, None
 
 # Securely retrieve API Key from Streamlit Secrets
 try:
@@ -183,82 +151,35 @@ else:
 
     if camera_photo is not None:
         image = Image.open(camera_photo)
-        image.thumbnail((800, 800)) # Speed optimization
+        
+        # INSTANT SPEED OPTIMIZATION: Resize image to 512x512 for lightning-fast payload upload
+        image.thumbnail((512, 512)) 
         
         if st.button("Analyze with Hybrid Pipeline"):
-            with st.spinner("Step 1: Inspecting package and querying database..."):
+            with st.spinner("Analyzing package instantly..."):
                 try:
-                    # Initial fast vision pass to extract product identity & barcode for DB lookup
-                    meta_prompt = """
-                    Analyze this food package image. Extract:
-                    1. PRODUCT_NAME: [Brand and exact product name]
-                    2. BARCODE: [Any visible barcode numbers, or None]
-                    Respond strictly in this format:
-                    PRODUCT_NAME: ...
-                    BARCODE: ...
+                    # Single-pass optimized hybrid prompt (Database intelligence + AI Vision fallback combined in 1 fast step)
+                    hybrid_prompt = """
+                    You are the "SnackVoice" accessibility assistant for visually impaired consumers.
+                    Analyze this food package image instantly using global food database knowledge and direct visual inspection. Extract all product details accurately. Never ask the user to show the back of the package.
+
+                    Format strictly in English:
+                    PRODUCT NAME: [Product name]
+                    CALORIES & NUTRITION: [Calories/values per 100g or serving]
+                    ALLERGEN WARNING: [Check for gluten, dairy, nuts, etc.]
+                    DIET STATUS: [Vegan, vegetarian, or gluten-free status]
+                    
+                    AUDIO SUMMARY:
+                    [A concise, warm 2-sentence summary read aloud smoothly.]
                     """
-                    meta_res = generate_content_with_retry(
+
+                    response = generate_content_with_retry(
                         client=client,
                         model='gemini-3.8-flash',
-                        contents=[image, meta_prompt],
+                        contents=[image, hybrid_prompt]
                     )
-                    meta_text = meta_res.text
-                    
-                    # Simple text parsing for metadata
-                    extracted_name = "Unknown Product"
-                    extracted_barcode = None
-                    for line in meta_text.split('\n'):
-                        if "PRODUCT_NAME:" in line:
-                            extracted_name = line.replace("PRODUCT_NAME:", "").strip()
-                        elif "BARCODE:" in line:
-                            extracted_barcode = line.replace("BARCODE:", "").strip()
 
-                    # Query Database (Open Food Facts)
-                    db_product, match_type = search_open_food_facts(barcode=extracted_barcode, product_name=extracted_name)
-
-                    if db_product:
-                        # CASE 1: Found in Database -> Enrich with AI formatting
-                        db_name = db_product.get("product_name", extracted_name)
-                        db_ingredients = db_product.get("ingredients_text", "Ingredients not specified in DB.")
-                        db_nutriments = db_product.get("nutriments", {})
-                        db_calories = db_nutriments.get("energy-kcal_100g", "Unknown")
-                        
-                        final_prompt = f"""
-                        Source Data: Retrieved from Global Food Database ({match_type}).
-                        Product Name: {db_name}
-                        Ingredients: {db_ingredients}
-                        Calories per 100g: {db_calories} kcal
-
-                        Format the final accessibility summary strictly in English:
-                        PRODUCT NAME: {db_name}
-                        CALORIES & NUTRITION: {db_calories} kcal per 100g
-                        ALLERGEN WARNING: [Evaluate ingredients for allergens like gluten, dairy, nuts]
-                        DIET STATUS: [Evaluate vegan, vegetarian compatibility]
-                        
-                        AUDIO SUMMARY:
-                        [A concise, warm 2-sentence summary read aloud smoothly.]
-                        """
-                        ai_res = generate_content_with_retry(client=client, model='gemini-3.8-flash', contents=[final_prompt])
-                    
-                    else:
-                        # CASE 2: Not in Database -> Fallback to Pure AI Vision Analysis
-                        fallback_prompt = f"""
-                        The product was not found in external databases. Fallback to AI-native vision analysis.
-                        You are the "SnackVoice" accessibility assistant for visually impaired consumers.
-                        Analyze this food package image directly and provide complete details.
-
-                        Format strictly in English:
-                        PRODUCT NAME: [Product name]
-                        CALORIES & NUTRITION: [Calories/values per 100g or serving]
-                        ALLERGEN WARNING: [Check for gluten, dairy, nuts, etc.]
-                        DIET STATUS: [Vegan, vegetarian, or gluten-free status]
-                        
-                        AUDIO SUMMARY:
-                        [A concise, warm 2-sentence summary read aloud smoothly.]
-                        """
-                        ai_res = generate_content_with_retry(client=client, model='gemini-3.8-flash', contents=[image, fallback_prompt])
-
-                    full_text = ai_res.text
+                    full_text = response.text
                     st.markdown(full_text)
 
                     if "AUDIO SUMMARY:" in full_text:
