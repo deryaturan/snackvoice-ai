@@ -1,34 +1,41 @@
-import streamlit as st
-from PIL import Image
-from google import genai
-from gtts import gTTS
-import io
-import time
 import base64
+import io
+import json
+import time
+from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
+
 import requests
+import streamlit as st
+from google import genai
+from google.genai import types
+from gtts import gTTS
+from PIL import Image
+from pydantic import BaseModel
+
+MODEL = "gemini-3.8-flash"   # Hız için Flash / Flash-Lite sınıfı bir model kullanın
+MAX_IMG_SIDE = 768           # Daha küçük görsel = daha hızlı yükleme + daha az token
 
 # 1. UI Configuration & Page Icon
 st.set_page_config(
-    page_title="SnackVoice AI", 
-    page_icon="🔊", 
+    page_title="SnackVoice AI",
+    page_icon="🔊",
     layout="centered",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="collapsed",
 )
 
-# 2. Custom CSS Styling (Optimized Logo & Embedded HTML5 Audio Controls in Floating Box)
+# 2. Custom CSS Styling
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
-    
+
     html, body, [class*="css"] {
         font-family: 'Plus Jakarta Sans', sans-serif;
         color: #111111;
         background-color: #FFF8DC;
     }
-    
-    .stApp {
-        background-color: #FFF8DC;
-    }
+
+    .stApp { background-color: #FFF8DC; }
 
     h1 {
         font-weight: 800 !important;
@@ -49,14 +56,14 @@ st.markdown("""
         line-height: 1.5 !important;
         color: #1A1A1A;
     }
-    
+
     [data-testid="stImage"] img {
         width: 170px !important;
         max-width: 100% !important;
         height: auto !important;
         border-radius: 12px;
     }
-    
+
     .stButton>button {
         width: 100%;
         height: 4em;
@@ -69,7 +76,7 @@ st.markdown("""
         box-shadow: 0 4px 14px rgba(192, 57, 43, 0.3);
         transition: all 0.2s ease-in-out;
     }
-    
+
     .stButton>button:hover {
         background: linear-gradient(135deg, #C0392B 0%, #962D22 100%);
         color: #FFFFFF;
@@ -77,7 +84,6 @@ st.markdown("""
         transform: translateY(-2px);
     }
 
-    /* Fixed Bottom-Right Floating Audio Card Wrapper with Embedded Player */
     .floating-audio-card {
         position: fixed;
         bottom: 24px;
@@ -108,8 +114,7 @@ st.markdown("""
 col_logo, col_title = st.columns([1.2, 3.8])
 with col_logo:
     try:
-        logo_img = Image.open("logo.png")
-        st.image(logo_img)
+        st.image(Image.open("logo.png"))
     except Exception:
         st.markdown("🔊")
 
@@ -118,54 +123,122 @@ with col_title:
 
 st.markdown("<hr style='border: 1px solid #F5B7B1; margin-top: 15px; margin-bottom: 20px;'>", unsafe_allow_html=True)
 
-# Helper function with retry mechanism for temporary server overloads (503)
-def generate_content_with_retry(client, model, contents, retries=3, delay=1):
-    for attempt in range(retries):
+
+# ---------------------------------------------------------------------------
+# Backend
+# ---------------------------------------------------------------------------
+class SnackInfo(BaseModel):
+    product_name: str
+    barcode: str          # sadece rakamlar, okunamıyorsa "None"
+    calories: str
+    allergens: str
+    diet_status: str
+    audio_summary: str
+
+
+PROMPT = """You are the "SnackVoice" accessibility assistant for visually impaired consumers.
+Analyze this food package image and fill every field in English.
+- product_name: brand and exact product name
+- barcode: digits only if a barcode number is clearly visible, otherwise "None"
+- calories: calories/nutrition values per 100g or per serving, as printed
+- allergens: gluten, dairy, nuts, etc. found on the package
+- diet_status: vegan / vegetarian / gluten-free status
+- audio_summary: a concise, warm 2-sentence summary to be read aloud
+Be brief. Do not invent values that are not on the package."""
+
+
+@st.cache_resource
+def get_client(api_key: str):
+    return genai.Client(api_key=api_key)
+
+
+def prepare_image(file) -> bytes:
+    """Küçült + JPEG sıkıştır: ağ üzerinden giden veri ve model işlem süresi azalır."""
+    img = Image.open(file).convert("RGB")
+    img.thumbnail((MAX_IMG_SIDE, MAX_IMG_SIDE))
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=80)
+    return buf.getvalue()
+
+
+@st.cache_data(show_spinner=False, ttl=3600)
+def analyze_package(img_bytes: bytes, api_key: str) -> dict:
+    """TEK Gemini çağrısı. Aynı fotoğraf tekrar gönderilirse anında cache'ten döner."""
+    client = get_client(api_key)
+    config = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        response_schema=SnackInfo,
+        max_output_tokens=800,
+        temperature=0.2,
+        # Düşünme (thinking) kapalı: bu görev için gecikmenin en büyük kaynağı.
+        # Gemini 3 serisinde hata verirse bunu şu şekilde değiştirin:
+        # thinking_config=types.ThinkingConfig(thinking_level="minimal")
+        thinking_config=types.ThinkingConfig(thinking_budget=0),
+    )
+    contents = [types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"), PROMPT]
+
+    delay = 1.0
+    for attempt in range(3):
         try:
-            return client.models.generate_content(
-                model=model, 
-                contents=contents,
-                config={'max_output_tokens': 800}
-            )
+            resp = client.models.generate_content(model=MODEL, contents=contents, config=config)
+            return json.loads(resp.text)
         except Exception as e:
-            if "503" in str(e) and attempt < retries - 1:
+            transient = any(k in str(e) for k in ("503", "UNAVAILABLE", "429"))
+            if transient and attempt < 2:
                 time.sleep(delay)
                 delay *= 1.5
             else:
-                raise e
+                raise
 
-# Open Food Facts Database Search Function (DB-First Strategy)
-def search_open_food_facts(barcode=None, product_name=None):
-    headers = {"User-Agent": "SnackVoiceAI - Accessibility App - Student Project"}
-    
-    # 1. Try Barcode Search if available
-    if barcode and barcode.lower() != "none" and barcode.isdigit():
-        url = f"https://world.openfoodfacts.org/api/v0/product/{barcode}.json"
-        try:
-            res = requests.get(url, headers=headers, timeout=3)
-            if res.status_code == 200:
-                data = res.json()
-                if data.get("status") == 1:
-                    return data.get("product", {}), "Database Match (Barcode)"
-        except Exception:
-            pass
 
-    # 2. Try Product Name Search if available
-    if product_name and product_name.lower() != "none":
-        search_url = f"https://world.openfoodfacts.org/cgi/search.pl?search_terms={requests.utils.quote(product_name)}&json=1"
-        try:
-            res = requests.get(search_url, headers=headers, timeout=3)
-            if res.status_code == 200:
-                data = res.json()
-                products = data.get("products", [])
-                if products:
-                    return products[0], "Database Match (Product Name)"
-        except Exception:
-            pass
-            
-    return None, None
+@lru_cache(maxsize=64)
+def lookup_barcode(barcode: str):
+    """Open Food Facts: sadece barkodla, sadece gereken alanlar, kısa timeout."""
+    if not (barcode.isdigit() and 8 <= len(barcode) <= 14):
+        return None
+    try:
+        r = requests.get(
+            f"https://world.openfoodfacts.org/api/v2/product/{barcode}",
+            params={"fields": "product_name,ingredients_text,nutriments"},
+            headers={"User-Agent": "SnackVoiceAI - Accessibility App - Student Project"},
+            timeout=2,
+        )
+        if r.status_code == 200 and r.json().get("status") == 1:
+            return r.json().get("product", {})
+    except Exception:
+        pass
+    return None
 
-# Securely retrieve API Key from Streamlit Secrets
+
+@lru_cache(maxsize=64)
+def make_audio_b64(text: str) -> str:
+    tts = gTTS(text=text, lang="en", slow=False)
+    fp = io.BytesIO()
+    tts.write_to_fp(fp)
+    return base64.b64encode(fp.getvalue()).decode("utf-8")
+
+
+def render_result(info: dict, db_product=None) -> str:
+    calories = info["calories"]
+    extra = ""
+    if db_product:
+        kcal = (db_product.get("nutriments") or {}).get("energy-kcal_100g")
+        if kcal is not None:
+            calories = f"{kcal} kcal per 100g (verified: Open Food Facts)"
+        if db_product.get("ingredients_text"):
+            extra = f"\n\n**INGREDIENTS:** {db_product['ingredients_text']}"
+    return (
+        f"**PRODUCT NAME:** {info['product_name']}\n\n"
+        f"**CALORIES & NUTRITION:** {calories}\n\n"
+        f"**ALLERGEN WARNING:** {info['allergens']}\n\n"
+        f"**DIET STATUS:** {info['diet_status']}"
+        f"{extra}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# App
+# ---------------------------------------------------------------------------
 try:
     api_key = st.secrets["GEMINI_API_KEY"]
 except Exception:
@@ -174,117 +247,43 @@ except Exception:
 if not api_key:
     st.error("System Error: GEMINI_API_KEY is not configured in Streamlit Secrets.")
 else:
-    client = genai.Client(api_key=api_key)
-
     st.markdown("### Smart Package Scanner & Hybrid Analyzer")
-    st.markdown("Capture the snack package. Our system first checks global food databases; if not found, it seamlessly falls back to AI vision analysis.")
+    st.markdown("Capture the snack package. Our system analyzes it with AI vision and verifies nutrition data against global food databases.")
 
     camera_photo = st.camera_input("Activate Camera for Instant Scan")
 
     if camera_photo is not None:
-        image = Image.open(camera_photo)
-        image.thumbnail((800, 800)) # Speed optimization
-        
+        img_bytes = prepare_image(camera_photo)
+
         if st.button("Analyze with Hybrid Pipeline"):
-            with st.spinner("Step 1: Inspecting package and querying database..."):
-                try:
-                    # Initial fast vision pass to extract product identity & barcode for DB lookup
-                    meta_prompt = """
-                    Analyze this food package image. Extract:
-                    1. PRODUCT_NAME: [Brand and exact product name]
-                    2. BARCODE: [Any visible barcode numbers, or None]
-                    Respond strictly in this format:
-                    PRODUCT_NAME: ...
-                    BARCODE: ...
-                    """
-                    meta_res = generate_content_with_retry(
-                        client=client,
-                        model='gemini-3.8-flash',
-                        contents=[image, meta_prompt],
-                    )
-                    meta_text = meta_res.text
-                    
-                    # Simple text parsing for metadata
-                    extracted_name = "Unknown Product"
-                    extracted_barcode = None
-                    for line in meta_text.split('\n'):
-                        if "PRODUCT_NAME:" in line:
-                            extracted_name = line.replace("PRODUCT_NAME:", "").strip()
-                        elif "BARCODE:" in line:
-                            extracted_barcode = line.replace("BARCODE:", "").strip()
+            try:
+                # Adım 1: tek Gemini çağrısı
+                with st.spinner("Analyzing package..."):
+                    info = analyze_package(img_bytes, api_key)
 
-                    # Query Database (Open Food Facts)
-                    db_product, match_type = search_open_food_facts(barcode=extracted_barcode, product_name=extracted_name)
+                # Metni HEMEN göster; kullanıcı sesi beklemeden okuyabilsin
+                result_box = st.empty()
+                result_box.markdown(render_result(info))
 
-                    if db_product:
-                        # CASE 1: Found in Database -> Enrich with AI formatting
-                        db_name = db_product.get("product_name", extracted_name)
-                        db_ingredients = db_product.get("ingredients_text", "Ingredients not specified in DB.")
-                        db_nutriments = db_product.get("nutriments", {})
-                        db_calories = db_nutriments.get("energy-kcal_100g", "Unknown")
-                        
-                        final_prompt = f"""
-                        Source Data: Retrieved from Global Food Database ({match_type}).
-                        Product Name: {db_name}
-                        Ingredients: {db_ingredients}
-                        Calories per 100g: {db_calories} kcal
+                # Adım 2: veritabanı doğrulaması ve ses üretimi PARALEL
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    db_future = pool.submit(lookup_barcode, info["barcode"].strip())
+                    audio_future = pool.submit(make_audio_b64, info["audio_summary"])
+                    db_product = db_future.result()
+                    audio_b64 = audio_future.result()
 
-                        Format the final accessibility summary strictly in English:
-                        PRODUCT NAME: {db_name}
-                        CALORIES & NUTRITION: {db_calories} kcal per 100g
-                        ALLERGEN WARNING: [Evaluate ingredients for allergens like gluten, dairy, nuts]
-                        DIET STATUS: [Evaluate vegan, vegetarian compatibility]
-                        
-                        AUDIO SUMMARY:
-                        [A concise, warm 2-sentence summary read aloud smoothly.]
-                        """
-                        ai_res = generate_content_with_retry(client=client, model='gemini-3.8-flash', contents=[final_prompt])
-                    
-                    else:
-                        # CASE 2: Not in Database -> Fallback to Pure AI Vision Analysis
-                        fallback_prompt = f"""
-                        The product was not found in external databases. Fallback to AI-native vision analysis.
-                        You are the "SnackVoice" accessibility assistant for visually impaired consumers.
-                        Analyze this food package image directly and provide complete details.
+                if db_product:
+                    result_box.markdown(render_result(info, db_product))
 
-                        Format strictly in English:
-                        PRODUCT NAME: [Product name]
-                        CALORIES & NUTRITION: [Calories/values per 100g or serving]
-                        ALLERGEN WARNING: [Check for gluten, dairy, nuts, etc.]
-                        DIET STATUS: [Vegan, vegetarian, or gluten-free status]
-                        
-                        AUDIO SUMMARY:
-                        [A concise, warm 2-sentence summary read aloud smoothly.]
-                        """
-                        ai_res = generate_content_with_retry(client=client, model='gemini-3.8-flash', contents=[image, fallback_prompt])
+                st.markdown(f"""
+                    <div class="floating-audio-card">
+                        <div class="audio-title">🔊 Audio Overview</div>
+                        <audio controls autoplay style="width: 100%; height: 38px;">
+                            <source src="data:audio/mp3;base64,{audio_b64}" type="audio/mp3">
+                            Your browser does not support the audio element.
+                        </audio>
+                    </div>
+                """, unsafe_allow_html=True)
 
-                    full_text = ai_res.text
-                    st.markdown(full_text)
-
-                    if "AUDIO SUMMARY:" in full_text:
-                        speech_text = full_text.split("AUDIO SUMMARY:")[1].strip()
-                    else:
-                        speech_text = full_text.replace("*", "").replace("#", "")
-
-                    # Generate Audio and convert to Base64 for embedded HTML player inside floating card
-                    tts = gTTS(text=speech_text, lang='en', slow=False)
-                    audio_fp = io.BytesIO()
-                    tts.write_to_fp(audio_fp)
-                    audio_fp.seek(0)
-                    
-                    audio_bytes = audio_fp.getvalue()
-                    audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
-
-                    # Fully embedded floating audio widget with interactive play/pause controls
-                    st.markdown(f"""
-                        <div class="floating-audio-card">
-                            <div class="audio-title">🔊 Audio Overview</div>
-                            <audio controls autoplay style="width: 100%; height: 38px;">
-                                <source src="data:audio/mp3;base64,{audio_base64}" type="audio/mp3">
-                                Your browser does not support the audio element.
-                            </audio>
-                        </div>
-                    """, unsafe_allow_html=True)
-
-                except Exception as e:
-                    st.error(f"An error occurred during analysis: {e}")
+            except Exception as e:
+                st.error(f"An error occurred during analysis: {e}")

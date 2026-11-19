@@ -1,5 +1,6 @@
 streamlit
+pillow
 google-genai
 gtts
-pillow
 requests
+pydantic
