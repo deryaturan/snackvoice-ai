@@ -13,8 +13,8 @@ from gtts import gTTS
 from PIL import Image
 from pydantic import BaseModel
 
-# Hızlı modeller sırayla denenir
-MODELS = ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.0-flash"]
+# Güncel model
+MODELS = ["gemini-3.8-flash"]
 GROQ_VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 MAX_IMG_SIDE = 512
 REQUEST_TIMEOUT_MS = 30000  # 30 saniye
