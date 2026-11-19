@@ -13,7 +13,9 @@ from gtts import gTTS
 from PIL import Image
 from pydantic import BaseModel
 
-MODEL = "gemini-3.8-flash"   # Hız için Flash / Flash-Lite sınıfı bir model kullanın
+# Sırayla denenir: ilki aşırı yüklüyse (503/429) otomatik olarak sonrakine geçilir.
+# Yedek model adlarını Google AI Studio'daki güncel listeden kontrol edin.
+MODELS = ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
 MAX_IMG_SIDE = 768           # Daha küçük görsel = daha hızlı yükleme + daha az token
 
 # 1. UI Configuration & Page Icon
@@ -177,18 +179,25 @@ def analyze_package(img_bytes: bytes, api_key: str) -> dict:
     )
     contents = [types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"), PROMPT]
 
-    delay = 1.0
-    for attempt in range(3):
-        try:
-            resp = client.models.generate_content(model=MODEL, contents=contents, config=config)
-            return json.loads(resp.text)
-        except Exception as e:
-            transient = any(k in str(e) for k in ("503", "UNAVAILABLE", "429"))
-            if transient and attempt < 2:
-                time.sleep(delay)
-                delay *= 1.5
-            else:
-                raise
+    last_error = None
+    for model in MODELS:
+        delay = 1.0
+        for attempt in range(2):          # her model için 2 deneme
+            try:
+                resp = client.models.generate_content(model=model, contents=contents, config=config)
+                return json.loads(resp.text)
+            except Exception as e:
+                last_error = e
+                transient = any(k in str(e) for k in ("503", "UNAVAILABLE", "429", "500", "504"))
+                if not transient:
+                    raise                 # gerçek bir hata: yedek modele geçmeyin
+                if attempt == 0:
+                    time.sleep(delay)
+                    delay *= 2
+        # Bu model yoğun: döngü bir sonraki yedek modele geçer
+    raise RuntimeError(
+        "Gemini servisleri şu an çok yoğun, lütfen birkaç saniye sonra tekrar deneyin."
+    ) from last_error
 
 
 @lru_cache(maxsize=64)
