@@ -14,9 +14,10 @@ from PIL import Image
 from pydantic import BaseModel
 
 # Hızlı modeller sırayla denenir
-MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"]
-MAX_IMG_SIDE = 640
-REQUEST_TIMEOUT_MS = 20000  # 20 saniye: dakikalarca asılı kalmayı önler
+MODELS = ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.0-flash"]
+GROQ_VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+MAX_IMG_SIDE = 512
+REQUEST_TIMEOUT_MS = 30000  # 30 saniye
 
 # 1. UI Configuration & Page Icon
 st.set_page_config(
@@ -148,6 +149,9 @@ Analyze this food package image and fill every field in English.
 - audio_summary: a concise, warm 2-sentence summary to be read aloud
 Be brief. Do not invent values that are not on the package."""
 
+JSON_ONLY_INSTRUCTION = """Return ONLY valid JSON with exact keys:
+{"product_name": "...", "barcode": "...", "calories": "...", "allergens": "...", "diet_status": "...", "audio_summary": "..."}"""
+
 
 @st.cache_resource
 def get_client(api_key: str):
@@ -166,6 +170,47 @@ def prepare_image(file) -> bytes:
     return buf.getvalue()
 
 
+def _parse_json_response(raw_text: str) -> dict:
+    cleaned = raw_text.strip()
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+        cleaned = "\n".join(line for line in lines if not line.strip().startswith("```")).strip()
+    return json.loads(cleaned)
+
+
+def _call_groq_fallback(img_bytes: bytes, groq_key: str) -> dict:
+    b64_img = base64.b64encode(img_bytes).decode("utf-8")
+    res = requests.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {groq_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": GROQ_VISION_MODEL,
+            "temperature": 0.2,
+            "max_tokens": 500,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": f"{PROMPT}\n\n{JSON_ONLY_INSTRUCTION}"},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"},
+                        },
+                    ],
+                }
+            ],
+        },
+        timeout=25,
+    )
+    res.raise_for_status()
+    content = res.json()["choices"][0]["message"]["content"]
+    return _parse_json_response(content)
+
+
 def _build_config(use_thinking_off: bool = True) -> types.GenerateContentConfig:
     kwargs = {
         "response_mime_type": "application/json",
@@ -179,8 +224,8 @@ def _build_config(use_thinking_off: bool = True) -> types.GenerateContentConfig:
 
 
 @st.cache_data(show_spinner=False, ttl=3600)
-def analyze_package(img_bytes: bytes, api_key: str) -> dict:
-    """Tek Gemini çağrısı; aynı fotoğraf için cache'ten anında döner."""
+def analyze_package(img_bytes: bytes, api_key: str, groq_key: str = "") -> tuple[dict, str]:
+    """Tek çağrı; aynı fotoğraf için cache'ten anında döner."""
     client = get_client(api_key)
     contents = [types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"), PROMPT]
 
@@ -193,7 +238,7 @@ def analyze_package(img_bytes: bytes, api_key: str) -> dict:
                     contents=contents,
                     config=_build_config(use_thinking_off=use_thinking_off),
                 )
-                return json.loads(resp.text)
+                return _parse_json_response(resp.text), f"Gemini ({model})"
             except Exception as e:
                 last_error = e
                 msg = str(e)
@@ -201,13 +246,18 @@ def analyze_package(img_bytes: bytes, api_key: str) -> dict:
                     break
                 if "thinking" in msg.lower() and use_thinking_off:
                     continue
-                transient = any(k in msg for k in ("503", "UNAVAILABLE", "429", "500", "504", "timed out", "deadline"))
+                transient = any(k in msg for k in ("503", "UNAVAILABLE", "429", "500", "504", "timed out", "deadline", "Timeout"))
                 if not transient:
-                    raise
+                    break
                 break
-    raise RuntimeError(
-        "Gemini yanıt vermedi veya zaman aşımına uğradı. Lütfen tekrar deneyin."
-    ) from last_error
+
+    if groq_key:
+        try:
+            return _call_groq_fallback(img_bytes, groq_key), f"Groq ({GROQ_VISION_MODEL})"
+        except Exception as g_err:
+            last_error = RuntimeError(f"Gemini error: {last_error} | Groq error: {g_err}")
+
+    raise RuntimeError(f"Model çağrısı başarısız oldu: {last_error}") from last_error
 
 
 @lru_cache(maxsize=64)
@@ -263,6 +313,8 @@ try:
 except Exception:
     api_key = None
 
+groq_key = st.secrets.get("GROQ_API_KEY", "") if hasattr(st, "secrets") else ""
+
 if not api_key:
     st.error("System Error: GEMINI_API_KEY is not configured in Streamlit Secrets.")
 else:
@@ -278,7 +330,7 @@ else:
             try:
                 t0 = time.perf_counter()
                 with st.spinner("Analyzing package..."):
-                    info = analyze_package(img_bytes, api_key)
+                    info, engine_used = analyze_package(img_bytes, api_key, groq_key)
                 t_ai = time.perf_counter() - t0
 
                 result_box = st.empty()
@@ -295,7 +347,7 @@ else:
                 if db_product:
                     result_box.markdown(render_result(info, db_product))
 
-                st.caption(f"⏱️ AI: {t_ai:.1f}s | DB & Audio: {t_extra:.1f}s | Total: {t_ai + t_extra:.1f}s")
+                st.caption(f"⏱️ {engine_used}: {t_ai:.1f}s | DB & Audio: {t_extra:.1f}s | Total: {t_ai + t_extra:.1f}s")
 
                 st.markdown(f"""
                     <div class="floating-audio-card">
