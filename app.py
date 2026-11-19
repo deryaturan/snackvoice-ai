@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 # Sırayla denenir: ilki aşırı yüklüyse (503/429) otomatik olarak sonrakine geçilir.
 # Yedek model adlarını Google AI Studio'daki güncel listeden kontrol edin.
-MODELS = ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
+MODELS = ["gemini-3.8-flash", "gemini-3.8-flash-lite"]
 MAX_IMG_SIDE = 768           # Daha küçük görsel = daha hızlı yükleme + daha az token
 
 # 1. UI Configuration & Page Icon
@@ -188,9 +188,12 @@ def analyze_package(img_bytes: bytes, api_key: str) -> dict:
                 return json.loads(resp.text)
             except Exception as e:
                 last_error = e
-                transient = any(k in str(e) for k in ("503", "UNAVAILABLE", "429", "500", "504"))
+                msg = str(e)
+                if "404" in msg or "NOT_FOUND" in msg:
+                    break                 # model yok/kapatılmış: hemen sıradaki modele geç
+                transient = any(k in msg for k in ("503", "UNAVAILABLE", "429", "500", "504"))
                 if not transient:
-                    raise                 # gerçek bir hata: yedek modele geçmeyin
+                    raise                 # gerçek bir hata (örn. API anahtarı): yedek modele geçmeyin
                 if attempt == 0:
                     time.sleep(delay)
                     delay *= 2
