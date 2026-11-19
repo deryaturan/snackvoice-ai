@@ -13,10 +13,10 @@ from gtts import gTTS
 from PIL import Image
 from pydantic import BaseModel
 
-# Sırayla denenir: ilki aşırı yüklüyse (503/429) otomatik olarak sonrakine geçilir.
-# Yedek model adlarını Google AI Studio'daki güncel listeden kontrol edin.
-MODELS = ["gemini-3.8-flash", "gemini-3.8-flash-lite"]
-MAX_IMG_SIDE = 768           # Daha küçük görsel = daha hızlı yükleme + daha az token
+# Hızlı modeller sırayla denenir
+MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"]
+MAX_IMG_SIDE = 640
+REQUEST_TIMEOUT_MS = 20000  # 20 saniye: dakikalarca asılı kalmayı önler
 
 # 1. UI Configuration & Page Icon
 st.set_page_config(
@@ -60,7 +60,7 @@ st.markdown("""
     }
 
     [data-testid="stImage"] img {
-        width: 170px !important;
+        width: 200px !important;
         max-width: 100% !important;
         height: auto !important;
         border-radius: 12px;
@@ -113,7 +113,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Aligned Header Layout
-col_logo, col_title = st.columns([1.2, 3.8])
+col_logo, col_title = st.columns([1.3, 3.7])
 with col_logo:
     try:
         st.image(Image.open("logo.png"))
@@ -131,7 +131,7 @@ st.markdown("<hr style='border: 1px solid #F5B7B1; margin-top: 15px; margin-bott
 # ---------------------------------------------------------------------------
 class SnackInfo(BaseModel):
     product_name: str
-    barcode: str          # sadece rakamlar, okunamıyorsa "None"
+    barcode: str
     calories: str
     allergens: str
     diet_status: str
@@ -151,7 +151,10 @@ Be brief. Do not invent values that are not on the package."""
 
 @st.cache_resource
 def get_client(api_key: str):
-    return genai.Client(api_key=api_key)
+    return genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS),
+    )
 
 
 def prepare_image(file) -> bytes:
@@ -159,61 +162,65 @@ def prepare_image(file) -> bytes:
     img = Image.open(file).convert("RGB")
     img.thumbnail((MAX_IMG_SIDE, MAX_IMG_SIDE))
     buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=80)
+    img.save(buf, format="JPEG", quality=75)
     return buf.getvalue()
+
+
+def _build_config(use_thinking_off: bool = True) -> types.GenerateContentConfig:
+    kwargs = {
+        "response_mime_type": "application/json",
+        "response_schema": SnackInfo,
+        "max_output_tokens": 500,
+        "temperature": 0.2,
+    }
+    if use_thinking_off:
+        kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
+    return types.GenerateContentConfig(**kwargs)
 
 
 @st.cache_data(show_spinner=False, ttl=3600)
 def analyze_package(img_bytes: bytes, api_key: str) -> dict:
-    """TEK Gemini çağrısı. Aynı fotoğraf tekrar gönderilirse anında cache'ten döner."""
+    """Tek Gemini çağrısı; aynı fotoğraf için cache'ten anında döner."""
     client = get_client(api_key)
-    config = types.GenerateContentConfig(
-        response_mime_type="application/json",
-        response_schema=SnackInfo,
-        max_output_tokens=800,
-        temperature=0.2,
-        # Düşünme (thinking) kapalı: bu görev için gecikmenin en büyük kaynağı.
-        # Gemini 3 serisinde hata verirse bunu şu şekilde değiştirin:
-        # thinking_config=types.ThinkingConfig(thinking_level="minimal")
-        thinking_config=types.ThinkingConfig(thinking_budget=0),
-    )
     contents = [types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"), PROMPT]
 
     last_error = None
     for model in MODELS:
-        delay = 1.0
-        for attempt in range(2):          # her model için 2 deneme
+        for use_thinking_off in (True, False):
             try:
-                resp = client.models.generate_content(model=model, contents=contents, config=config)
+                resp = client.models.generate_content(
+                    model=model,
+                    contents=contents,
+                    config=_build_config(use_thinking_off=use_thinking_off),
+                )
                 return json.loads(resp.text)
             except Exception as e:
                 last_error = e
                 msg = str(e)
                 if "404" in msg or "NOT_FOUND" in msg:
-                    break                 # model yok/kapatılmış: hemen sıradaki modele geç
-                transient = any(k in msg for k in ("503", "UNAVAILABLE", "429", "500", "504"))
+                    break
+                if "thinking" in msg.lower() and use_thinking_off:
+                    continue
+                transient = any(k in msg for k in ("503", "UNAVAILABLE", "429", "500", "504", "timed out", "deadline"))
                 if not transient:
-                    raise                 # gerçek bir hata (örn. API anahtarı): yedek modele geçmeyin
-                if attempt == 0:
-                    time.sleep(delay)
-                    delay *= 2
-        # Bu model yoğun: döngü bir sonraki yedek modele geçer
+                    raise
+                break
     raise RuntimeError(
-        "Gemini servisleri şu an çok yoğun, lütfen birkaç saniye sonra tekrar deneyin."
+        "Gemini yanıt vermedi veya zaman aşımına uğradı. Lütfen tekrar deneyin."
     ) from last_error
 
 
 @lru_cache(maxsize=64)
 def lookup_barcode(barcode: str):
-    """Open Food Facts: sadece barkodla, sadece gereken alanlar, kısa timeout."""
-    if not (barcode.isdigit() and 8 <= len(barcode) <= 14):
+    """Open Food Facts: barkod varsa kısa timeout ile sorgular."""
+    if not (barcode and barcode.isdigit() and 8 <= len(barcode) <= 14):
         return None
     try:
         r = requests.get(
             f"https://world.openfoodfacts.org/api/v2/product/{barcode}",
             params={"fields": "product_name,ingredients_text,nutriments"},
             headers={"User-Agent": "SnackVoiceAI - Accessibility App - Student Project"},
-            timeout=2,
+            timeout=1.5,
         )
         if r.status_code == 200 and r.json().get("status") == 1:
             return r.json().get("product", {})
@@ -269,23 +276,26 @@ else:
 
         if st.button("Analyze with Hybrid Pipeline"):
             try:
-                # Adım 1: tek Gemini çağrısı
+                t0 = time.perf_counter()
                 with st.spinner("Analyzing package..."):
                     info = analyze_package(img_bytes, api_key)
+                t_ai = time.perf_counter() - t0
 
-                # Metni HEMEN göster; kullanıcı sesi beklemeden okuyabilsin
                 result_box = st.empty()
                 result_box.markdown(render_result(info))
 
-                # Adım 2: veritabanı doğrulaması ve ses üretimi PARALEL
+                t1 = time.perf_counter()
                 with ThreadPoolExecutor(max_workers=2) as pool:
-                    db_future = pool.submit(lookup_barcode, info["barcode"].strip())
+                    db_future = pool.submit(lookup_barcode, info.get("barcode", "").strip())
                     audio_future = pool.submit(make_audio_b64, info["audio_summary"])
                     db_product = db_future.result()
                     audio_b64 = audio_future.result()
+                t_extra = time.perf_counter() - t1
 
                 if db_product:
                     result_box.markdown(render_result(info, db_product))
+
+                st.caption(f"⏱️ AI: {t_ai:.1f}s | DB & Audio: {t_extra:.1f}s | Total: {t_ai + t_extra:.1f}s")
 
                 st.markdown(f"""
                     <div class="floating-audio-card">
