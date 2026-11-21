@@ -597,13 +597,6 @@ else:
                     st.warning("Audio could not be generated right now, but the results above are complete.")
             t_audio = time.perf_counter()
 
-            first = f"first word {holder['t_first'] - t0:.1f}s · " if "t_first" in holder else ("saved template · " if used_template else "cached · ")
-            st.caption(
-                f"⏱ {first}AI total {t_stream - t0:.1f}s · "
-                f"database wait {t_db - t_stream:.1f}s · audio {t_audio - t_db:.1f}s · "
-                f"model {holder.get('model', 'cached')} · google-genai {getattr(genai, '__version__', '?')}"
-            )
-
             if audio_b64:
                 st.markdown(f"""
                     <div class="floating-audio-card">
