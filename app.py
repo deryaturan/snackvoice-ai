@@ -157,9 +157,9 @@ SKIP_WORDS = ("image", "tts", "audio", "live", "embedding", "robotics", "compute
 
 
 @st.cache_resource
-def get_client(api_key: str):
-    # timeout is in milliseconds: fail fast instead of hanging on an overloaded model
-    return genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=20000))
+def get_client(api_key: str, timeout_ms: int = 25000):
+    # timeout is in milliseconds: fail instead of hanging forever on an overloaded model
+    return genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=timeout_ms))
 
 
 def prepare_image(file) -> bytes:
@@ -262,9 +262,10 @@ def stream_analysis(client, img_bytes: bytes, models: list, groq_key: str = ""):
     contents = [types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"), PROMPT]
     last_error = None
     t_start = time.perf_counter()
+    budget = 8 if groq_key else TOTAL_BUDGET_S   # with a backup available, give up on Gemini sooner
 
     for model in models:
-        if time.perf_counter() - t_start > TOTAL_BUDGET_S:
+        if time.perf_counter() - t_start > budget:
             break                                           # do not keep the user waiting forever
         options = _thinking_options(model)
         oi = 0
@@ -522,7 +523,7 @@ if not api_key:
 elif str(api_key).startswith("gsk_"):
     st.error("GEMINI_API_KEY contains a Groq key (starts with gsk_). Create a Gemini key at aistudio.google.com/apikey.")
 else:
-    client = get_client(api_key)
+    client = get_client(api_key, 10000 if groq_key else 25000)
 
     st.markdown("### Smart Package Scanner & Hybrid Analyzer")
     st.markdown("Capture the snack package. AI vision identifies the product, then our system pulls verified nutrition data from the Open Food Facts database. If the product is not found, the AI analysis is used.")
