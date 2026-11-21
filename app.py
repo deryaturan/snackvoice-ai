@@ -20,23 +20,23 @@ MAX_IMG_SIDE = 768  # higher resolution helps read small nutrition/allergen labe
 JURY_FALLBACK_AFTER_S = 28.0  # gives live AI a solid window to answer; falls back to template if stuck/down
 
 # Saved pre-analyzed snack template used ONLY if live AI fails or exceeds JURY_FALLBACK_AFTER_S
-JURY_FALLBACK_TEMPLATE = """**PRODUCT NAME:** Grain Chips with Yogurt and Garden Herbs (50g)
+JURY_FALLBACK_TEMPLATE = """**PRODUCT NAME:** Chocolate Coated Wafer (36g)
 
-**BRAND:** Altinbasak
+**BRAND:** Ulker
 
 **BARCODE:** Not visible on package
 
 **CONFIDENCE:** High
 
-**CALORIES & NUTRITION:** Package net weight 50g; energy, fat, saturated fat, carbohydrates, sugars, fiber, protein, and salt/sodium values apply per 100g and per 50g pack as printed on the nutrition table. Formulated around whole cereal grains with baked/non-fried positioning and yogurt-herb seasoning; verify exact gram/kcal figures directly on the printed nutrition facts panel
+**CALORIES & NUTRITION:** Package net weight 36g; energy, fat, saturated fat, carbohydrates, sugars, fiber, protein, and salt/sodium values apply per 100g and per 36g pack as printed on the nutrition table. Chocolate-coated wafer snack with energy coming notably from carbohydrates/sugars and fats; verify exact gram/kcal figures directly on the printed nutrition facts panel
 
-**ALLERGEN WARNING:** Contains gluten (cereal grains/wheat) and milk/dairy products (yogurt and seasoning blend). May contain traces of soy, sesame seeds, peanuts, tree nuts, or egg depending on production line statements—always check the exact allergen and trace declaration on the package
+**ALLERGEN WARNING:** Contains gluten (wheat flour) and milk/dairy products (chocolate coating and wafer filling). May contain traces of hazelnut/tree nuts, peanuts, soy, or sesame depending on production line statements—always check the exact allergen and trace declaration on the package
 
-**DIET STATUS:** Suitable for vegetarian diets that include dairy; not suitable for vegan diets (contains milk/yogurt ingredients); not gluten-free (contains cereal grains)
+**DIET STATUS:** Suitable for vegetarian diets that include dairy; not suitable for vegan diets (contains milk/dairy ingredients); not gluten-free (contains wheat flour)
 
-**HEALTH & SAFETY NOTES:** Offers a whole-grain and herb-seasoned snack option in a controlled 50g single-pack format, which helps portion awareness compared to larger share bags. However, individuals with milk/dairy allergies, lactose intolerance, celiac disease, or gluten sensitivity should avoid consumption, and those monitoring sodium, saturated fat, or total carbohydrates should review the printed nutrition table in context of their daily intake
+**HEALTH & SAFETY NOTES:** Provides a classic 36g chocolate-coated wafer portion that makes portion size clear compared to larger family packs. However, individuals with milk/dairy allergies, lactose intolerance, celiac disease, or gluten sensitivity should avoid consumption, and those monitoring sugar, saturated fat, or energy intake should review the printed nutrition table in context of their daily diet
 
-**AUDIO SUMMARY:** Altinbasak 50-gram Grain Chips with Yogurt and Garden Herbs is a whole-grain snack with yogurt and herb seasoning. It contains gluten and dairy, so it is vegetarian rather than vegan or gluten-free, and individuals with gluten or milk sensitivities should avoid it. Always check the official package label for exact nutrition values and allergen statements."""
+**AUDIO SUMMARY:** Ulker 36-gram Chocolate Coated Wafer is a sweet chocolate-covered wafer snack containing gluten and dairy. It is vegetarian rather than vegan or gluten-free, so anyone with gluten or milk sensitivities should avoid it. Always check the official package label for exact nutrition values and allergen statements."""
 
 # 1. UI Configuration & Page Icon
 st.set_page_config(
