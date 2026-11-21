@@ -17,9 +17,9 @@ from PIL import Image
 # The app also discovers other Flash-class models automatically and uses them as backups.
 PREFERRED_MODELS = ["gemini-3.8-flash", "gemini-3.8-flash-lite"]
 MAX_IMG_SIDE = 768  # higher resolution helps read small nutrition/allergen labels accurately
-JURY_FALLBACK_AFTER_S = 12.0  # if AI takes longer than this during demo, fall back to saved template
+JURY_FALLBACK_AFTER_S = 28.0  # gives live AI a solid window to answer; falls back to template if stuck/down
 
-# Saved pre-analyzed snack template used if live AI is slow or fails during jury presentation
+# Saved pre-analyzed snack template used ONLY if live AI fails or exceeds JURY_FALLBACK_AFTER_S
 JURY_FALLBACK_TEMPLATE = """**PRODUCT NAME:** Grain Chips with Yogurt and Garden Herbs
 
 **BRAND:** Altinbasak
@@ -179,7 +179,7 @@ SKIP_WORDS = ("image", "tts", "audio", "live", "embedding", "robotics", "compute
 
 
 @st.cache_resource
-def get_client(api_key: str, timeout_ms: int = 12000):
+def get_client(api_key: str, timeout_ms: int = 18000):
     # timeout is in milliseconds: fail fast enough to switch models or use saved template
     return genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=timeout_ms))
 
