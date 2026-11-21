@@ -152,13 +152,14 @@ HEADERS = {"User-Agent": "SnackVoiceAI/1.0 (accessibility student project)"}
 OFF_FIELDS = "code,product_name,brands,ingredients_text,nutriments,allergens_tags,ingredients_analysis_tags"
 TRANSIENT = ("503", "UNAVAILABLE", "500", "504", "INTERNAL", "timed out", "Timeout",
              "DEADLINE", "Empty response", "Connection", "disconnected")
+TOTAL_BUDGET_S = 45  # stop trying new models after this many seconds
 SKIP_WORDS = ("image", "tts", "audio", "live", "embedding", "robotics", "computer-use", "veo", "imagen", "native")
 
 
 @st.cache_resource
 def get_client(api_key: str):
     # timeout is in milliseconds: fail fast instead of hanging on an overloaded model
-    return genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=12000))
+    return genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=20000))
 
 
 def prepare_image(file) -> bytes:
@@ -193,14 +194,25 @@ def gemini_candidates(api_key: str) -> list:
     return (ordered + extras)[:4] or list(PREFERRED_MODELS)
 
 
-def _config(use_thinking: bool = True):
+def _thinking_options(model: str) -> list:
+    """Thinking settings to try in order (None = send no thinking config at all).
+    Gemini 3 models use thinking_level; older ones use thinking_budget."""
+    opts = []
+    if model.startswith("gemini-3"):
+        opts.append("level")
+    opts += ["budget", None]
+    return opts
+
+
+def _config(think):
     kwargs = {"max_output_tokens": 500, "temperature": 0.2}
-    if use_thinking:
-        try:
-            # Thinking off: the biggest latency source for this simple task.
+    try:
+        if think == "level":
+            kwargs["thinking_config"] = types.ThinkingConfig(thinking_level="minimal")
+        elif think == "budget":
             kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
-        except Exception:
-            pass
+    except Exception:
+        pass  # SDK does not know this option: send the request without it
     return types.GenerateContentConfig(**kwargs)
 
 
@@ -249,15 +261,19 @@ def stream_analysis(client, img_bytes: bytes, models: list, groq_key: str = ""):
     BEFORE the first chunk is shown; after that, errors are raised, never restarted."""
     contents = [types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"), PROMPT]
     last_error = None
+    t_start = time.perf_counter()
 
     for model in models:
-        use_thinking = True
+        if time.perf_counter() - t_start > TOTAL_BUDGET_S:
+            break                                           # do not keep the user waiting forever
+        options = _thinking_options(model)
+        oi = 0
         attempt = 0
         while attempt < 3:
             started = False
             try:
                 for chunk in client.models.generate_content_stream(
-                    model=model, contents=contents, config=_config(use_thinking)
+                    model=model, contents=contents, config=_config(options[oi])
                 ):
                     if chunk.text:
                         started = True
@@ -272,11 +288,14 @@ def stream_analysis(client, img_bytes: bytes, models: list, groq_key: str = ""):
                 msg = str(e)
                 if "404" in msg or "NOT_FOUND" in msg:
                     break                                   # model not available: next model
-                if use_thinking and "thinking" in msg.lower() and ("400" in msg or "INVALID_ARGUMENT" in msg):
-                    use_thinking = False                    # this model rejects the thinking setting
-                    continue                                # retry same model without it
+                if ("thinking" in msg.lower() and ("400" in msg or "INVALID_ARGUMENT" in msg)
+                        and oi + 1 < len(options)):
+                    oi += 1                                 # this model rejects that thinking setting
+                    continue                                # retry same model with the next setting
                 if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
                     break                                   # quota/rate limit: next model
+                if "timed out" in msg or "Timeout" in msg or "DEADLINE" in msg:
+                    break                                   # too slow right now: try the next model
                 if not any(k in msg for k in TRANSIENT):
                     raise                                   # real error (e.g. bad API key)
                 attempt += 1
@@ -514,7 +533,12 @@ else:
     if camera_photo is not None and st.button("Analyze with Hybrid Pipeline"):
         t0 = time.perf_counter()
         status = st.empty()
-        status.info("🔍 Analyzing... the AI is reading the package, this takes a few seconds.")
+        status.markdown(
+            "<div style='background:#FFF3B0;border:1px solid #F1C40F;border-radius:12px;"
+            "padding:12px 16px;color:#111111;font-weight:600;'>"
+            "🔍 Analyzing... the AI is reading the package, this takes a few seconds.</div>",
+            unsafe_allow_html=True,
+        )
         pool = ThreadPoolExecutor(max_workers=1)
         try:
             img_bytes = prepare_image(camera_photo)
@@ -522,7 +546,6 @@ else:
             results = st.session_state.setdefault("results", {})
             holder = {"future": None, "status": status}
 
-            st.markdown("#### 🤖 AI Vision Analysis")
             if key in results:                      # same photo again: instant
                 full_text = results[key]
                 status.empty()
