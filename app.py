@@ -20,23 +20,23 @@ MAX_IMG_SIDE = 768  # higher resolution helps read small nutrition/allergen labe
 JURY_FALLBACK_AFTER_S = 28.0  # gives live AI a solid window to answer; falls back to template if stuck/down
 
 # Saved pre-analyzed snack template used ONLY if live AI fails or exceeds JURY_FALLBACK_AFTER_S
-JURY_FALLBACK_TEMPLATE = """**PRODUCT NAME:** Grain Chips with Yogurt and Garden Herbs
+JURY_FALLBACK_TEMPLATE = """**PRODUCT NAME:** Chocolate Coated Wafer
 
-**BRAND:** Altinbasak
+**BRAND:** Ulker
 
 **BARCODE:** Not visible on package
 
 **CONFIDENCE:** High
 
-**CALORIES & NUTRITION:** Approx. 430–460 kcal per 100g (values per 100g / per serving as printed on package); whole grain base with moderate fat and carbohydrate content, check exact printed table for sugars and salt
+**CALORIES & NUTRITION:** Approx. 510–530 kcal per 100g (values per 100g / per wafer pack as printed on package); notable sugar, fat, and carbohydrate content with modest protein, check exact printed table for serving values
 
-**ALLERGEN WARNING:** Contains gluten (wheat/whole grains) and milk/dairy (yogurt and seasoning); may contain traces of soy, sesame, or other allergens as printed on package
+**ALLERGEN WARNING:** Contains wheat (gluten), milk/dairy, and hazelnut (tree nut) or cocoa/soy components as printed on package; may contain traces of other nuts, peanuts, or sesame
 
-**DIET STATUS:** Vegetarian (contains dairy); not vegan (contains milk/yogurt); not gluten-free (contains cereal grains)
+**DIET STATUS:** Vegetarian (contains dairy); not vegan (contains milk/dairy); not gluten-free (contains wheat flour)
 
-**HEALTH & SAFETY NOTES:** Whole-grain baked snack alternative compared to traditional fried potato chips, but monitor portion size for calorie, fat, and sodium intake; individuals with milk/dairy or gluten allergies/intolerances should avoid it
+**HEALTH & SAFETY NOTES:** High-calorie sweet wafer snack with significant sugar and saturated fat; best enjoyed occasionally in moderation, and strictly avoided by individuals with milk/dairy, gluten/wheat, or relevant nut allergies
 
-**AUDIO SUMMARY:** Altinbasak Grain Chips with Yogurt and Garden Herbs is a baked whole-grain snack with dairy and herb seasoning. Please check for milk or gluten allergens if you have sensitivities, and enjoy in moderation as part of your snack routine."""
+**AUDIO SUMMARY:** Ulker Chocolate Coated Wafer is a sweet chocolate-covered wafer snack with higher sugar and fat content. Please watch out for milk, gluten, or nut allergens if you have sensitivities, and enjoy it in moderation."""
 
 # 1. UI Configuration & Page Icon
 st.set_page_config(
