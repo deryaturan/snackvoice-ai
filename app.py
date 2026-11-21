@@ -152,12 +152,12 @@ HEADERS = {"User-Agent": "SnackVoiceAI/1.0 (accessibility student project)"}
 OFF_FIELDS = "code,product_name,brands,ingredients_text,nutriments,allergens_tags,ingredients_analysis_tags"
 TRANSIENT = ("503", "UNAVAILABLE", "500", "504", "INTERNAL", "timed out", "Timeout",
              "DEADLINE", "Empty response", "Connection", "disconnected")
-TOTAL_BUDGET_S = 45  # stop trying new models after this many seconds
+TOTAL_BUDGET_S = 25  # stop trying new models after this many seconds
 SKIP_WORDS = ("image", "tts", "audio", "live", "embedding", "robotics", "computer-use", "veo", "imagen", "native")
 
 
 @st.cache_resource
-def get_client(api_key: str, timeout_ms: int = 25000):
+def get_client(api_key: str, timeout_ms: int = 15000):
     # timeout is in milliseconds: fail instead of hanging forever on an overloaded model
     return genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=timeout_ms))
 
@@ -208,7 +208,7 @@ def _config(think):
     kwargs = {"max_output_tokens": 500, "temperature": 0.2}
     try:
         if think == "level":
-            kwargs["thinking_config"] = types.ThinkingConfig(thinking_level="minimal")
+            kwargs["thinking_config"] = types.ThinkingConfig(thinking_level="low")
         elif think == "budget":
             kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
     except Exception:
@@ -226,21 +226,22 @@ def stream_analysis(client, img_bytes: bytes, models: list, info: dict = None):
 
     for model in models:
         if time.perf_counter() - t_start > budget:
-            break                                           # do not keep the user waiting forever
+            break
         options = _thinking_options(model)
         oi = 0
         attempt = 0
-        while attempt < 3:
+        while attempt < 2:
             started = False
             try:
                 for chunk in client.models.generate_content_stream(
                     model=model, contents=contents, config=_config(options[oi])
                 ):
-                    if chunk.text:
+                    chunk_text = getattr(chunk, "text", None)
+                    if chunk_text:
                         started = True
                         if info is not None:
-                            info["model"] = model           # remember which model answered
-                        yield chunk.text
+                            info["model"] = model
+                        yield chunk_text
                 if started:
                     return
                 raise RuntimeError("Empty response (possibly blocked by safety filters)")
@@ -250,20 +251,20 @@ def stream_analysis(client, img_bytes: bytes, models: list, info: dict = None):
                 last_error = e
                 msg = str(e)
                 if "404" in msg or "NOT_FOUND" in msg:
-                    break                                   # model not available: next model
+                    break
                 if ("thinking" in msg.lower() and ("400" in msg or "INVALID_ARGUMENT" in msg)
                         and oi + 1 < len(options)):
-                    oi += 1                                 # this model rejects that thinking setting
-                    continue                                # retry same model with the next setting
+                    oi += 1
+                    continue
                 if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
-                    break                                   # quota/rate limit: next model
+                    break
                 if "timed out" in msg or "Timeout" in msg or "DEADLINE" in msg:
-                    break                                   # too slow right now: try the next model
+                    break
                 if not any(k in msg for k in TRANSIENT):
-                    raise                                   # real error (e.g. bad API key)
+                    raise
                 attempt += 1
-                if attempt < 3:
-                    time.sleep(attempt)                     # overload: wait 1 s, then 2 s
+                if attempt < 2:
+                    time.sleep(0.5)
 
     if last_error is None:
         raise RuntimeError("No available Gemini model for this API key. Check Google AI Studio.")
@@ -311,7 +312,7 @@ def _match_score(ai_name, ai_brand, product) -> float:
 
 def _get_json(url, params):
     try:
-        r = requests.get(url, params=params, headers=HEADERS, timeout=2.5)
+        r = requests.get(url, params=params, headers=HEADERS, timeout=2.0)
         if r.status_code == 200:
             return r.json()
     except Exception:
@@ -503,11 +504,10 @@ else:
                 status.empty()
                 st.markdown(full_text)
             else:
-                full_text = st.write_stream(
+                streamed = st.write_stream(
                     stream_with_lookup(client, img_bytes, models, pool, holder)
                 )
-                if not isinstance(full_text, str):
-                    full_text = "".join(str(x) for x in full_text)
+                full_text = streamed if isinstance(streamed, str) else "".join(str(x) for x in (streamed or []))
                 results[key] = full_text
                 if len(results) > 30:               # keep memory small
                     results.pop(next(iter(results)))
@@ -518,7 +518,7 @@ else:
                 holder["future"] = pool.submit(find_in_database, *ids_from_text(full_text))
             with st.spinner("Checking Open Food Facts..."):
                 try:
-                    product, how = holder["future"].result(timeout=6)
+                    product, how = holder["future"].result(timeout=4)
                 except Exception:
                     product, how = None, None
             t_db = time.perf_counter()
