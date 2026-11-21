@@ -375,6 +375,8 @@ def stream_with_lookup(client, img_bytes, pool, holder):
     for piece in stream_analysis(client, img_bytes):
         if "t_first" not in holder:
             holder["t_first"] = time.perf_counter()
+            if holder.get("status") is not None:
+                holder["status"].empty()      # first word arrived: remove the "working" message
         buf += piece
         if holder["future"] is None and "CALORIES" in buf:
             holder["future"] = pool.submit(find_in_database, *ids_from_text(buf))
@@ -415,18 +417,22 @@ else:
             try:
                 results = st.session_state.setdefault("results", {})
                 t0 = time.perf_counter()
+                status = st.empty()
+                status.info("🔍 Analyzing... the AI is reading the package, this takes a few seconds.")
                 st.markdown("#### 🤖 AI Vision Analysis")
 
                 with ThreadPoolExecutor(max_workers=1) as pool:
-                    holder = {"future": None}
+                    holder = {"future": None, "status": status}
                     if key in results:
                         full_text = results[key]
+                        status.empty()
                         st.markdown(full_text)
                     else:
                         full_text = st.write_stream(stream_with_lookup(client, img_bytes, pool, holder))
                         results[key] = full_text
 
                     t_stream = time.perf_counter()
+                    status.empty()
                     if holder["future"] is None:
                         holder["future"] = pool.submit(find_in_database, *ids_from_text(full_text))
                     with st.spinner("Checking Open Food Facts..."):
