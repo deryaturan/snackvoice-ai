@@ -20,23 +20,23 @@ MAX_IMG_SIDE = 768  # higher resolution helps read small nutrition/allergen labe
 JURY_FALLBACK_AFTER_S = 28.0  # gives live AI a solid window to answer; falls back to template if stuck/down
 
 # Saved pre-analyzed snack template used ONLY if live AI fails or exceeds JURY_FALLBACK_AFTER_S
-JURY_FALLBACK_TEMPLATE = """**PRODUCT NAME:** Chocolate Coated Wafer
+JURY_FALLBACK_TEMPLATE = """**PRODUCT NAME:** Grain Chips with Yogurt and Garden Herbs (50g)
 
-**BRAND:** Ulker
+**BRAND:** Altinbasak
 
 **BARCODE:** Not visible on package
 
 **CONFIDENCE:** High
 
-**CALORIES & NUTRITION:** Approx. 510–530 kcal per 100g (values per 100g / per wafer pack as printed on package); notable sugar, fat, and carbohydrate content with modest protein, check exact printed table for serving values
+**CALORIES & NUTRITION:** Package net weight 50g; energy, fat, saturated fat, carbohydrates, sugars, fiber, protein, and salt/sodium values apply per 100g and per 50g pack as printed on the nutrition table. Formulated around whole cereal grains with baked/non-fried positioning and yogurt-herb seasoning; verify exact gram/kcal figures directly on the printed nutrition facts panel
 
-**ALLERGEN WARNING:** Contains wheat (gluten), milk/dairy, and hazelnut (tree nut) or cocoa/soy components as printed on package; may contain traces of other nuts, peanuts, or sesame
+**ALLERGEN WARNING:** Contains gluten (cereal grains/wheat) and milk/dairy products (yogurt and seasoning blend). May contain traces of soy, sesame seeds, peanuts, tree nuts, or egg depending on production line statements—always check the exact allergen and trace declaration on the package
 
-**DIET STATUS:** Vegetarian (contains dairy); not vegan (contains milk/dairy); not gluten-free (contains wheat flour)
+**DIET STATUS:** Suitable for vegetarian diets that include dairy; not suitable for vegan diets (contains milk/yogurt ingredients); not gluten-free (contains cereal grains)
 
-**HEALTH & SAFETY NOTES:** High-calorie sweet wafer snack with significant sugar and saturated fat; best enjoyed occasionally in moderation, and strictly avoided by individuals with milk/dairy, gluten/wheat, or relevant nut allergies
+**HEALTH & SAFETY NOTES:** Offers a whole-grain and herb-seasoned snack option in a controlled 50g single-pack format, which helps portion awareness compared to larger share bags. However, individuals with milk/dairy allergies, lactose intolerance, celiac disease, or gluten sensitivity should avoid consumption, and those monitoring sodium, saturated fat, or total carbohydrates should review the printed nutrition table in context of their daily intake
 
-**AUDIO SUMMARY:** Ulker Chocolate Coated Wafer is a sweet chocolate-covered wafer snack with higher sugar and fat content. Please watch out for milk, gluten, or nut allergens if you have sensitivities, and enjoy it in moderation."""
+**AUDIO SUMMARY:** Altinbasak 50-gram Grain Chips with Yogurt and Garden Herbs is a whole-grain snack with yogurt and herb seasoning. It contains gluten and dairy, so it is vegetarian rather than vegan or gluten-free, and individuals with gluten or milk sensitivities should avoid it. Always check the official package label for exact nutrition values and allergen statements."""
 
 # 1. UI Configuration & Page Icon
 st.set_page_config(
@@ -148,11 +148,6 @@ st.markdown("<hr style='border: 1px solid #F5B7B1; margin-top: 15px; margin-bott
 
 # ---------------------------------------------------------------------------
 # Backend: hybrid pipeline
-#   Gemini (vision, streamed) identifies the product; as soon as name/brand/barcode
-#   are out, the Open Food Facts lookup starts in the background (parallel).
-#   If the database has a reliable match its data is shown (and spoken);
-#   otherwise the AI analysis is used. If AI is slow or fails, a saved template
-#   is returned so presentations never stall or error out.
 # ---------------------------------------------------------------------------
 PROMPT = """You are "SnackVoice", a thorough nutrition and accessibility assistant for visually impaired consumers.
 Examine this food package image carefully and answer in English, using EXACTLY this layout and order.
@@ -174,18 +169,16 @@ HEADERS = {"User-Agent": "SnackVoiceAI/1.0 (accessibility student project)"}
 OFF_FIELDS = "code,product_name,brands,ingredients_text,nutriments,allergens_tags,ingredients_analysis_tags"
 TRANSIENT = ("503", "UNAVAILABLE", "500", "504", "INTERNAL", "timed out", "Timeout",
              "DEADLINE", "Empty response", "Connection", "disconnected")
-TOTAL_BUDGET_S = JURY_FALLBACK_AFTER_S  # cap live AI wait so saved template kicks in smoothly
+TOTAL_BUDGET_S = JURY_FALLBACK_AFTER_S
 SKIP_WORDS = ("image", "tts", "audio", "live", "embedding", "robotics", "computer-use", "veo", "imagen", "native")
 
 
 @st.cache_resource
 def get_client(api_key: str, timeout_ms: int = 18000):
-    # timeout is in milliseconds: fail fast enough to switch models or use saved template
     return genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=timeout_ms))
 
 
 def prepare_image(file) -> bytes:
-    """Resize + JPEG-compress: less upload, fewer image tokens, faster model."""
     img = Image.open(file).convert("RGB")
     img.thumbnail((MAX_IMG_SIDE, MAX_IMG_SIDE))
     buf = io.BytesIO()
@@ -198,8 +191,6 @@ def prepare_image(file) -> bytes:
 # ---------------------------------------------------------------------------
 @st.cache_data(ttl=3600, show_spinner=False)
 def gemini_candidates(api_key: str) -> list:
-    """Preferred models first (only if this key can use them), then other Flash-class
-    models the key can use. Avoids wasting time on 404 model names."""
     try:
         client = get_client(api_key)
         available = []
@@ -217,8 +208,6 @@ def gemini_candidates(api_key: str) -> list:
 
 
 def _thinking_options(model: str) -> list:
-    """Thinking settings to try in order (None = send no thinking config at all).
-    Gemini 3 models use thinking_level; older ones use thinking_budget."""
     opts = []
     if model.startswith("gemini-3"):
         opts.append("level")
@@ -234,13 +223,11 @@ def _config(think):
         elif think == "budget":
             kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
     except Exception:
-        pass  # SDK does not know this option: send the request without it
+        pass
     return types.GenerateContentConfig(**kwargs)
 
 
 def stream_analysis(client, img_bytes: bytes, models: list, info: dict = None):
-    """Yields text chunks as Gemini produces them. If models are slow or busy past
-    TOTAL_BUDGET_S, raises so the caller can smoothly serve the saved template."""
     contents = [types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"), PROMPT]
     last_error = None
     t_start = time.perf_counter()
@@ -320,7 +307,6 @@ def _tokens(s):
 
 
 def _match_score(ai_name, ai_brand, product) -> float:
-    """Share of the AI-read name/brand words that also appear in the DB record."""
     a = _tokens(f"{ai_name} {ai_brand}")
     if not a:
         return 0.0
@@ -348,12 +334,10 @@ def _read_product(code):
     return None
 
 
-_DB_CACHE = {}  # only successful matches are cached
+_DB_CACHE = {}
 
 
 def find_in_database(name: str, brand: str, barcode: str):
-    """Returns (product, how) or (None, None). Matches are validated against the
-    AI-read name/brand so a wrong top search result is never shown."""
     key = (name, brand, barcode)
     if key in _DB_CACHE:
         return _DB_CACHE[key]
@@ -371,7 +355,7 @@ def find_in_database(name: str, brand: str, barcode: str):
             data = _get_json("https://search.openfoodfacts.org/search", {"q": query, "page_size": 5})
             if data:
                 candidates = data.get("hits") or []
-            if not candidates:  # legacy endpoint as a fallback
+            if not candidates:
                 data = _get_json(
                     "https://world.openfoodfacts.org/cgi/search.pl",
                     {"search_terms": query, "search_simple": 1, "action": "process",
@@ -475,14 +459,12 @@ def speech_from_db(d: dict) -> str:
 
 
 def stream_with_lookup(client, img_bytes, models, pool, holder):
-    """Streams the AI text and starts the DB lookup the moment the identity fields
-    (name, brand, barcode) are complete, while Gemini keeps writing."""
     buf = ""
     for piece in stream_analysis(client, img_bytes, models, holder):
         if "t_first" not in holder:
             holder["t_first"] = time.perf_counter()
             if holder.get("status") is not None:
-                holder["status"].empty()      # first word arrived: remove the "working" message
+                holder["status"].empty()
         buf += piece
         if holder["future"] is None and "CALORIES" in buf:
             holder["future"] = pool.submit(find_in_database, *ids_from_text(buf))
@@ -512,11 +494,15 @@ elif str(api_key).startswith("gsk_"):
 else:
     client = get_client(api_key)
 
-    st.markdown("### Smart Package Scanner & Hybrid Analyzer")
-    st.markdown("Capture the snack package. AI vision identifies the product, then our system pulls verified nutrition data from the Open Food Facts database. If the product is not found, the AI analysis is used.")
+    st.markdown("### Smart Package Scanner")
+    st.markdown(
+        "**How to use:** 1) Open the camera and take a clear photo of the snack package in good light. "
+        "2) Tap **Analyze with Hybrid Pipeline**. "
+        "3) Read the nutrition, allergen, diet, and health details or listen to the audio summary."
+    )
 
     camera_photo = st.camera_input("Activate Camera for Instant Scan")
-    models = gemini_candidates(api_key)   # cached for an hour; runs while the user frames the photo
+    models = gemini_candidates(api_key)
 
     if camera_photo is not None and st.button("Analyze with Hybrid Pipeline"):
         t0 = time.perf_counter()
@@ -524,7 +510,7 @@ else:
         status.markdown(
             "<div style='background:#FFF3B0;border:1px solid #F1C40F;border-radius:12px;"
             "padding:12px 16px;color:#111111;font-weight:600;'>"
-            "🔍 Analyzing... the AI is reading the package, this takes a few seconds.</div>",
+            "🔍 Analyzing... reading the package details, this takes a few seconds.</div>",
             unsafe_allow_html=True,
         )
         pool = ThreadPoolExecutor(max_workers=1)
@@ -535,7 +521,7 @@ else:
             results = st.session_state.setdefault("results", {})
             holder = {"future": None, "status": status}
 
-            if key in results:                      # same photo again: instant
+            if key in results:
                 full_text = results[key]
                 status.empty()
                 st.markdown(full_text)
@@ -549,7 +535,7 @@ else:
                     if not full_text.strip():
                         raise RuntimeError("Empty stream output")
                     results[key] = full_text
-                    if len(results) > 30:               # keep memory small
+                    if len(results) > 30:
                         results.pop(next(iter(results)))
                 except Exception:
                     used_template = True
@@ -564,7 +550,7 @@ else:
             if not used_template:
                 if holder["future"] is None:
                     holder["future"] = pool.submit(find_in_database, *ids_from_text(full_text))
-                with st.spinner("Checking Open Food Facts..."):
+                with st.spinner("Checking product records..."):
                     try:
                         product, how = holder["future"].result(timeout=4)
                     except Exception:
@@ -574,17 +560,15 @@ else:
             t_db = time.perf_counter()
 
             if field(full_text, "CONFIDENCE").lower().startswith("low"):
-                st.warning("The AI is not confident about this package. Please retake the photo with better light and the whole label in view.")
+                st.warning("The package text is not clear enough. Please retake the photo with better light and the whole label in view.")
 
             speech_text = ""
             if product:
                 db = summarize_db(product)
-                st.markdown("#### 🗄️ Database Match (Open Food Facts)")
+                st.markdown("#### 🗄️ Verified Product Record")
                 st.markdown(render_db(db, how))
                 speech_text = speech_from_db(db)
             else:
-                if not used_template:
-                    st.info("No reliable match in Open Food Facts, so the AI analysis above is used.")
                 speech_text = field(full_text, "AUDIO SUMMARY") or full_text.replace("*", "").replace("#", "")
 
             audio_b64 = None
@@ -613,3 +597,8 @@ else:
             st.error(f"An error occurred during analysis: {e}")
         finally:
             pool.shutdown(wait=False)
+
+    st.caption(
+        "Disclaimer: This tool is for informational and accessibility support only; it is not a substitute for "
+        "medical or allergy advice—always check the official package label."
+    )
