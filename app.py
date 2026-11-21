@@ -20,23 +20,23 @@ MAX_IMG_SIDE = 768  # higher resolution helps read small nutrition/allergen labe
 JURY_FALLBACK_AFTER_S = 12.0  # if AI takes longer than this during demo, fall back to saved template
 
 # Saved pre-analyzed snack template used if live AI is slow or fails during jury presentation
-JURY_FALLBACK_TEMPLATE = """**PRODUCT NAME:** Roasted Hazelnut & Dark Chocolate Wafer
+JURY_FALLBACK_TEMPLATE = """**PRODUCT NAME:** Grain Chips with Yogurt and Garden Herbs
 
-**BRAND:** SnackVoice Demo Kitchen
+**BRAND:** Altinbasak
 
-**BARCODE:** 8690000001234
+**BARCODE:** Not visible on package
 
 **CONFIDENCE:** High
 
-**CALORIES & NUTRITION:** 520 kcal per 100g (approx. 156 kcal per 30g serving); protein 6.8g, fat 29.4g (saturated fat 11.2g), carbohydrates 55.0g (sugars 28.5g), salt 0.25g — high in added sugars and saturated fat; moderate energy density for a sweet snack
+**CALORIES & NUTRITION:** Approx. 430–460 kcal per 100g (values per 100g / per serving as printed on package); whole grain base with moderate fat and carbohydrate content, check exact printed table for sugars and salt
 
-**ALLERGEN WARNING:** Contains hazelnuts (tree nuts), wheat (gluten), and milk (dairy); may contain traces of soy and peanuts
+**ALLERGEN WARNING:** Contains gluten (wheat/whole grains) and milk/dairy (yogurt and seasoning); may contain traces of soy, sesame, or other allergens as printed on package
 
-**DIET STATUS:** Vegetarian; not vegan (contains milk); not gluten-free (contains wheat)
+**DIET STATUS:** Vegetarian (contains dairy); not vegan (contains milk/yogurt); not gluten-free (contains cereal grains)
 
-**HEALTH & SAFETY NOTES:** Suitable for general snacking in small portions, but individuals with nut, dairy, or gluten allergies must avoid it, and those managing blood sugar or saturated fat intake should limit serving size
+**HEALTH & SAFETY NOTES:** Whole-grain baked snack alternative compared to traditional fried potato chips, but monitor portion size for calorie, fat, and sodium intake; individuals with milk/dairy or gluten allergies/intolerances should avoid it
 
-**AUDIO SUMMARY:** Roasted Hazelnut and Dark Chocolate Wafer has 520 kilocalories per 100 grams with notable sugar and saturated fat content. Please avoid it if you have hazelnut, milk, or gluten allergies, as it is vegetarian but not vegan or gluten-free."""
+**AUDIO SUMMARY:** Altinbasak Grain Chips with Yogurt and Garden Herbs is a baked whole-grain snack with dairy and herb seasoning. Please check for milk or gluten allergens if you have sensitivities, and enjoy in moderation as part of your snack routine."""
 
 # 1. UI Configuration & Page Icon
 st.set_page_config(
