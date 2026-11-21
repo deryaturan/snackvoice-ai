@@ -13,9 +13,9 @@ from google.genai import types
 from gtts import gTTS
 from PIL import Image
 
-# Tried in order: if the first is overloaded (503/429) or missing (404), the next is used.
-# Check current model names in Google AI Studio.
-MODELS = ["gemini-3.8-flash", "gemini-3.8-flash-lite"]
+# Preferred Gemini models, tried first (only if your API key can use them).
+# The app also discovers other Flash-class models automatically and uses them as backups.
+PREFERRED_MODELS = ["gemini-3.8-flash", "gemini-3.8-flash-lite"]
 MAX_IMG_SIDE = 640  # smaller image = faster upload and fewer tokens (raise to 768 if small text is misread)
 
 # 1. UI Configuration & Page Icon
@@ -128,9 +128,10 @@ st.markdown("<hr style='border: 1px solid #F5B7B1; margin-top: 15px; margin-bott
 
 # ---------------------------------------------------------------------------
 # Backend: hybrid pipeline
-#   Gemini (vision) identifies the product while streaming; as soon as the
-#   name/brand/barcode lines are out, the Open Food Facts lookup starts in a
-#   background thread, so both run at the same time.
+#   Gemini (vision, streamed) identifies the product; as soon as name/brand/barcode
+#   are out, the Open Food Facts lookup starts in the background (parallel).
+#   If the database has a reliable match its data is shown (and spoken);
+#   otherwise the AI analysis is used.
 # ---------------------------------------------------------------------------
 PROMPT = """You are "SnackVoice", an accessibility assistant for visually impaired consumers.
 Look at this food package image and answer in English, using EXACTLY this layout and order.
@@ -149,6 +150,9 @@ Be brief. Never invent values that are not visible on the package; write "Not vi
 
 HEADERS = {"User-Agent": "SnackVoiceAI/1.0 (accessibility student project)"}
 OFF_FIELDS = "code,product_name,brands,ingredients_text,nutriments,allergens_tags,ingredients_analysis_tags"
+TRANSIENT = ("503", "UNAVAILABLE", "500", "504", "INTERNAL", "timed out", "Timeout",
+             "DEADLINE", "Empty response", "Connection", "disconnected")
+SKIP_WORDS = ("image", "tts", "audio", "live", "embedding", "robotics", "computer-use", "veo", "imagen", "native")
 
 
 @st.cache_resource
@@ -158,6 +162,7 @@ def get_client(api_key: str):
 
 
 def prepare_image(file) -> bytes:
+    """Resize + JPEG-compress: less upload, fewer image tokens, faster model."""
     img = Image.open(file).convert("RGB")
     img.thumbnail((MAX_IMG_SIDE, MAX_IMG_SIDE))
     buf = io.BytesIO()
@@ -165,54 +170,136 @@ def prepare_image(file) -> bytes:
     return buf.getvalue()
 
 
-_BAD_MODELS = set()  # models that returned 404 once are skipped for the rest of the session
+# ---------------------------------------------------------------------------
+# Gemini: model selection + streaming with retry / fallback
+# ---------------------------------------------------------------------------
+@st.cache_data(ttl=3600, show_spinner=False)
+def gemini_candidates(api_key: str) -> list:
+    """Preferred models first (only if this key can use them), then other Flash-class
+    models the key can use. Avoids wasting time on 404 model names."""
+    try:
+        client = get_client(api_key)
+        available = []
+        for m in client.models.list():
+            name = (getattr(m, "name", "") or "").replace("models/", "")
+            actions = getattr(m, "supported_actions", None) or []
+            if ("flash" in name and (not actions or "generateContent" in actions)
+                    and not any(w in name for w in SKIP_WORDS)):
+                available.append(name)
+    except Exception:
+        return list(PREFERRED_MODELS)
+    ordered = [m for m in PREFERRED_MODELS if m in available]
+    extras = sorted((m for m in available if m not in ordered), reverse=True)
+    return (ordered + extras)[:4] or list(PREFERRED_MODELS)
 
 
-def stream_analysis(client, img_bytes: bytes):
-    """Yields text chunks as Gemini produces them (retry/fallback only before first chunk)."""
-    config = types.GenerateContentConfig(
-        max_output_tokens=500,
-        temperature=0.2,
-        # If a Gemini 3 model rejects this, use:
-        # thinking_config=types.ThinkingConfig(thinking_level="minimal")
-        thinking_config=types.ThinkingConfig(thinking_budget=0),
-    )
+def _config(use_thinking: bool = True):
+    kwargs = {"max_output_tokens": 500, "temperature": 0.2}
+    if use_thinking:
+        try:
+            # Thinking off: the biggest latency source for this simple task.
+            kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
+        except Exception:
+            pass
+    return types.GenerateContentConfig(**kwargs)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def groq_vision_models(groq_key: str) -> list:
+    preferred = ["meta-llama/llama-4-scout-17b-16e-instruct",
+                 "meta-llama/llama-4-maverick-17b-128e-instruct"]
+    try:
+        r = requests.get("https://api.groq.com/openai/v1/models",
+                         headers={"Authorization": f"Bearer {groq_key}"}, timeout=5)
+        ids = [m["id"] for m in r.json().get("data", [])] if r.ok else []
+    except Exception:
+        ids = []
+    if not ids:
+        return preferred
+    found = [m for m in preferred if m in ids]
+    extra = [i for i in ids if i not in found and any(k in i.lower() for k in ("scout", "maverick", "vision"))]
+    return (found + extra)[:3] or preferred
+
+
+def call_groq_vision(img_bytes: bytes, groq_key: str) -> str:
+    """OPTIONAL free fallback; only used if GROQ_API_KEY is set and Gemini is unavailable."""
+    b64 = base64.b64encode(img_bytes).decode("utf-8")
+    last = ""
+    for model in groq_vision_models(groq_key):
+        try:
+            res = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
+                json={"model": model, "temperature": 0.2, "max_tokens": 500,
+                      "messages": [{"role": "user", "content": [
+                          {"type": "text", "text": PROMPT},
+                          {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}]}]},
+                timeout=15,
+            )
+            if res.ok:
+                return res.json()["choices"][0]["message"]["content"]
+            last = f"{model}: {res.status_code} {res.text[:150]}"
+        except Exception as e:
+            last = f"{model}: {e}"
+    raise RuntimeError(f"No Groq vision model worked ({last})")
+
+
+def stream_analysis(client, img_bytes: bytes, models: list, groq_key: str = ""):
+    """Yields text chunks as Gemini produces them. Retries / model switching only happen
+    BEFORE the first chunk is shown; after that, errors are raised, never restarted."""
     contents = [types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"), PROMPT]
-
     last_error = None
-    for model in MODELS:
-        if model in _BAD_MODELS:
-            continue
-        for attempt in range(2):
+
+    for model in models:
+        use_thinking = True
+        attempt = 0
+        while attempt < 3:
             started = False
             try:
                 for chunk in client.models.generate_content_stream(
-                    model=model, contents=contents, config=config
+                    model=model, contents=contents, config=_config(use_thinking)
                 ):
                     if chunk.text:
                         started = True
                         yield chunk.text
-                return
+                if started:
+                    return
+                raise RuntimeError("Empty response (possibly blocked by safety filters)")
             except Exception as e:
                 if started:
                     raise
                 last_error = e
                 msg = str(e)
                 if "404" in msg or "NOT_FOUND" in msg:
-                    _BAD_MODELS.add(model)
-                    break
-                if not any(k in msg for k in ("503", "UNAVAILABLE", "429", "500", "504")):
-                    raise
-                if attempt == 0:
-                    time.sleep(1)
+                    break                                   # model not available: next model
+                if use_thinking and "thinking" in msg.lower() and ("400" in msg or "INVALID_ARGUMENT" in msg):
+                    use_thinking = False                    # this model rejects the thinking setting
+                    continue                                # retry same model without it
+                if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
+                    break                                   # quota/rate limit: next model
+                if not any(k in msg for k in TRANSIENT):
+                    raise                                   # real error (e.g. bad API key)
+                attempt += 1
+                if attempt < 3:
+                    time.sleep(attempt)                     # overload: wait 1 s, then 2 s
+
+    if groq_key:
+        try:
+            yield call_groq_vision(img_bytes, groq_key)
+            return
+        except Exception as ge:
+            raise RuntimeError(f"Gemini: {str(last_error)[:200]} | Groq: {str(ge)[:200]}") from ge
     if last_error is None:
-        raise RuntimeError("No available Gemini model. Check the MODELS list at the top of the file.")
+        raise RuntimeError("No available Gemini model for this API key. Check Google AI Studio.")
     raise RuntimeError(
-        "Gemini is very busy right now, please try again in a few seconds."
+        "Gemini is busy or over its quota right now. Please try again in a moment. "
+        f"(Details: {str(last_error)[:250]})"
     ) from last_error
 
 
-# ---------- text helpers ----------
+# ---------------------------------------------------------------------------
+# Text helpers
+# ---------------------------------------------------------------------------
 def field(text: str, label: str) -> str:
     m = re.search(rf"{label}:\**\s*(.+)", text)
     return m.group(1).replace("*", "").strip() if m else ""
@@ -227,7 +314,9 @@ def ids_from_text(text: str):
     return name, brand, barcode
 
 
-# ---------- Open Food Facts ----------
+# ---------------------------------------------------------------------------
+# Open Food Facts (free, no key)
+# ---------------------------------------------------------------------------
 def _tokens(s):
     return {t for t in re.findall(r"[a-z0-9çğıöşü]+", (s or "").lower()) if len(t) >= 3}
 
@@ -255,9 +344,7 @@ def _get_json(url, params):
 
 
 def _read_product(code):
-    data = _get_json(
-        f"https://world.openfoodfacts.org/api/v2/product/{code}.json", {"fields": OFF_FIELDS}
-    )
+    data = _get_json(f"https://world.openfoodfacts.org/api/v2/product/{code}.json", {"fields": OFF_FIELDS})
     if data and data.get("status") == 1:
         return data.get("product")
     return None
@@ -267,37 +354,41 @@ _DB_CACHE = {}  # only successful matches are cached
 
 
 def find_in_database(name: str, brand: str, barcode: str):
-    """Returns (product, how) or (None, None). The match is validated against the
+    """Returns (product, how) or (None, None). Matches are validated against the
     AI-read name/brand so a wrong top search result is never shown."""
     key = (name, brand, barcode)
     if key in _DB_CACHE:
         return _DB_CACHE[key]
 
     result = (None, None)
-    if 8 <= len(barcode) <= 14:
-        p = _read_product(barcode)
-        if p and _match_score(name, brand, p) >= 0.3:
-            result = (p, "barcode")
+    try:
+        if 8 <= len(barcode) <= 14:
+            p = _read_product(barcode)
+            if p and _match_score(name, brand, p) >= 0.3:
+                result = (p, "barcode")
 
-    query = f"{brand} {name}".strip()
-    if result[0] is None and query and name.lower() != "unknown product":
-        candidates = []
-        data = _get_json("https://search.openfoodfacts.org/search", {"q": query, "page_size": 5})
-        if data:
-            candidates = data.get("hits") or []
-        if not candidates:  # legacy endpoint as a fallback
-            data = _get_json(
-                "https://world.openfoodfacts.org/cgi/search.pl",
-                {"search_terms": query, "search_simple": 1, "action": "process",
-                 "json": 1, "page_size": 5, "fields": "code,product_name,brands"},
-            )
+        query = f"{brand} {name}".strip()
+        if result[0] is None and query and name.lower() != "unknown product":
+            candidates = []
+            data = _get_json("https://search.openfoodfacts.org/search", {"q": query, "page_size": 5})
             if data:
-                candidates = data.get("products") or []
-        best = max(candidates, key=lambda c: _match_score(name, brand, c), default=None)
-        if best and best.get("code") and _match_score(name, brand, best) >= 0.5:
-            p = _read_product(best["code"])
-            if p:
-                result = (p, "product name")
+                candidates = data.get("hits") or []
+            if not candidates:  # legacy endpoint as a fallback
+                data = _get_json(
+                    "https://world.openfoodfacts.org/cgi/search.pl",
+                    {"search_terms": query, "search_simple": 1, "action": "process",
+                     "json": 1, "page_size": 5, "fields": "code,product_name,brands"},
+                )
+                if data:
+                    candidates = data.get("products") or []
+            candidates = [c for c in candidates if isinstance(c, dict)]
+            best = max(candidates, key=lambda c: _match_score(name, brand, c), default=None)
+            if best and best.get("code") and _match_score(name, brand, best) >= 0.5:
+                p = _read_product(best["code"])
+                if p:
+                    result = (p, "product name")
+    except Exception:
+        result = (None, None)
 
     if result[0] is not None:
         _DB_CACHE[key] = result
@@ -326,9 +417,12 @@ def summarize_db(p: dict) -> dict:
         diet = "Unknown"
 
     allergens = [t.split(":")[-1].replace("-", " ") for t in (p.get("allergens_tags") or [])]
+    brands = p.get("brands") or ""
+    if isinstance(brands, list):
+        brands = ", ".join(brands)
     return {
         "name": p.get("product_name") or "Unknown",
-        "brand": p.get("brands") or "",
+        "brand": brands,
         "kcal": g("energy-kcal_100g"),
         "protein": g("proteins_100g"),
         "fat": g("fat_100g"),
@@ -346,7 +440,7 @@ def render_db(d: dict, how: str) -> str:
         return f"{x} {unit}" if x is not None else "n/a"
 
     lines = [
-        f"**PRODUCT:** {d['name']} {('(' + d['brand'] + ')') if d['brand'] else ''}",
+        f"**PRODUCT:** {d['name']}" + (f" ({d['brand']})" if d["brand"] else ""),
         f"**CALORIES:** {v(d['kcal'], 'kcal')} per 100g",
         f"**NUTRITION (per 100g):** protein {v(d['protein'], 'g')}, fat {v(d['fat'], 'g')}, "
         f"carbohydrates {v(d['carbs'], 'g')} (sugars {v(d['sugars'], 'g')}), salt {v(d['salt'], 'g')}",
@@ -368,11 +462,11 @@ def speech_from_db(d: dict) -> str:
     return " ".join(parts)
 
 
-def stream_with_lookup(client, img_bytes, pool, holder):
-    """Streams the AI text and starts the DB lookup the moment the identity
-    fields (name, brand, barcode) are complete, while Gemini keeps writing."""
+def stream_with_lookup(client, img_bytes, models, groq_key, pool, holder):
+    """Streams the AI text and starts the DB lookup the moment the identity fields
+    (name, brand, barcode) are complete, while Gemini keeps writing."""
     buf = ""
-    for piece in stream_analysis(client, img_bytes):
+    for piece in stream_analysis(client, img_bytes, models, groq_key):
         if "t_first" not in holder:
             holder["t_first"] = time.perf_counter()
             if holder.get("status") is not None:
@@ -399,8 +493,15 @@ try:
 except Exception:
     api_key = None
 
+try:
+    groq_key = st.secrets.get("GROQ_API_KEY", "")   # optional, leave unset to disable
+except Exception:
+    groq_key = ""
+
 if not api_key:
     st.error("System Error: GEMINI_API_KEY is not configured in Streamlit Secrets.")
+elif str(api_key).startswith("gsk_"):
+    st.error("GEMINI_API_KEY contains a Groq key (starts with gsk_). Create a Gemini key at aistudio.google.com/apikey.")
 else:
     client = get_client(api_key)
 
@@ -408,62 +509,75 @@ else:
     st.markdown("Capture the snack package. AI vision identifies the product, then our system pulls verified nutrition data from the Open Food Facts database. If the product is not found, the AI analysis is used.")
 
     camera_photo = st.camera_input("Activate Camera for Instant Scan")
+    models = gemini_candidates(api_key)   # cached for an hour; runs while the user frames the photo
 
-    if camera_photo is not None:
-        img_bytes = prepare_image(camera_photo)
-        key = hashlib.md5(img_bytes).hexdigest()
+    if camera_photo is not None and st.button("Analyze with Hybrid Pipeline"):
+        t0 = time.perf_counter()
+        status = st.empty()
+        status.info("🔍 Analyzing... the AI is reading the package, this takes a few seconds.")
+        pool = ThreadPoolExecutor(max_workers=1)
+        try:
+            img_bytes = prepare_image(camera_photo)
+            key = hashlib.md5(img_bytes).hexdigest()
+            results = st.session_state.setdefault("results", {})
+            holder = {"future": None, "status": status}
 
-        if st.button("Analyze with Hybrid Pipeline"):
-            try:
-                results = st.session_state.setdefault("results", {})
-                t0 = time.perf_counter()
-                status = st.empty()
-                status.info("🔍 Analyzing... the AI is reading the package, this takes a few seconds.")
-                st.markdown("#### 🤖 AI Vision Analysis")
-
-                with ThreadPoolExecutor(max_workers=1) as pool:
-                    holder = {"future": None, "status": status}
-                    if key in results:
-                        full_text = results[key]
-                        status.empty()
-                        st.markdown(full_text)
-                    else:
-                        full_text = st.write_stream(stream_with_lookup(client, img_bytes, pool, holder))
-                        results[key] = full_text
-
-                    t_stream = time.perf_counter()
-                    status.empty()
-                    if holder["future"] is None:
-                        holder["future"] = pool.submit(find_in_database, *ids_from_text(full_text))
-                    with st.spinner("Checking Open Food Facts..."):
-                        try:
-                            product, how = holder["future"].result(timeout=6)
-                        except Exception:
-                            product, how = None, None
-                    t_db = time.perf_counter()
-
-                conf = field(full_text, "CONFIDENCE").lower()
-                if conf.startswith("low"):
-                    st.warning("The AI is not confident about this package. Please retake the photo with better light and the whole label in view.")
-
-                if product:
-                    db = summarize_db(product)
-                    st.markdown("#### 🗄️ Database Match (Open Food Facts)")
-                    st.markdown(render_db(db, how))
-                    speech_text = speech_from_db(db)
-                else:
-                    st.info("No reliable match in Open Food Facts, so the AI analysis above is used.")
-                    speech_text = field(full_text, "AUDIO SUMMARY") or full_text.replace("*", "").replace("#", "")
-
-                with st.spinner("Preparing audio..."):
-                    audio_b64 = make_audio_b64(speech_text)
-                t_audio = time.perf_counter()
-                first = f"first word {holder['t_first'] - t0:.1f}s · " if "t_first" in holder else "cached · "
-                st.caption(
-                    f"⏱ {first}AI total {t_stream - t0:.1f}s · "
-                    f"database wait {t_db - t_stream:.1f}s · audio {t_audio - t_db:.1f}s"
+            st.markdown("#### 🤖 AI Vision Analysis")
+            if key in results:                      # same photo again: instant
+                full_text = results[key]
+                status.empty()
+                st.markdown(full_text)
+            else:
+                full_text = st.write_stream(
+                    stream_with_lookup(client, img_bytes, models, groq_key, pool, holder)
                 )
+                if not isinstance(full_text, str):
+                    full_text = "".join(str(x) for x in full_text)
+                results[key] = full_text
+                if len(results) > 30:               # keep memory small
+                    results.pop(next(iter(results)))
+            t_stream = time.perf_counter()
+            status.empty()
 
+            if holder["future"] is None:
+                holder["future"] = pool.submit(find_in_database, *ids_from_text(full_text))
+            with st.spinner("Checking Open Food Facts..."):
+                try:
+                    product, how = holder["future"].result(timeout=6)
+                except Exception:
+                    product, how = None, None
+            t_db = time.perf_counter()
+
+            if field(full_text, "CONFIDENCE").lower().startswith("low"):
+                st.warning("The AI is not confident about this package. Please retake the photo with better light and the whole label in view.")
+
+            speech_text = ""
+            if product:
+                db = summarize_db(product)
+                st.markdown("#### 🗄️ Database Match (Open Food Facts)")
+                st.markdown(render_db(db, how))
+                speech_text = speech_from_db(db)
+            else:
+                st.info("No reliable match in Open Food Facts, so the AI analysis above is used.")
+                speech_text = field(full_text, "AUDIO SUMMARY") or full_text.replace("*", "").replace("#", "")
+
+            audio_b64 = None
+            speech_text = speech_text.strip()[:800]
+            if speech_text:
+                try:
+                    with st.spinner("Preparing audio..."):
+                        audio_b64 = make_audio_b64(speech_text)
+                except Exception:
+                    st.warning("Audio could not be generated right now, but the results above are complete.")
+            t_audio = time.perf_counter()
+
+            first = f"first word {holder['t_first'] - t0:.1f}s · " if "t_first" in holder else "cached · "
+            st.caption(
+                f"⏱ {first}AI total {t_stream - t0:.1f}s · "
+                f"database wait {t_db - t_stream:.1f}s · audio {t_audio - t_db:.1f}s"
+            )
+
+            if audio_b64:
                 st.markdown(f"""
                     <div class="floating-audio-card">
                         <div class="audio-title">🔊 Audio Overview</div>
@@ -474,5 +588,8 @@ else:
                     </div>
                 """, unsafe_allow_html=True)
 
-            except Exception as e:
-                st.error(f"An error occurred during analysis: {e}")
+        except Exception as e:
+            status.empty()
+            st.error(f"An error occurred during analysis: {e}")
+        finally:
+            pool.shutdown(wait=False)
