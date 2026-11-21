@@ -216,53 +216,13 @@ def _config(think):
     return types.GenerateContentConfig(**kwargs)
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def groq_vision_models(groq_key: str) -> list:
-    preferred = ["meta-llama/llama-4-scout-17b-16e-instruct",
-                 "meta-llama/llama-4-maverick-17b-128e-instruct"]
-    try:
-        r = requests.get("https://api.groq.com/openai/v1/models",
-                         headers={"Authorization": f"Bearer {groq_key}"}, timeout=5)
-        ids = [m["id"] for m in r.json().get("data", [])] if r.ok else []
-    except Exception:
-        ids = []
-    if not ids:
-        return preferred
-    found = [m for m in preferred if m in ids]
-    extra = [i for i in ids if i not in found and any(k in i.lower() for k in ("scout", "maverick", "vision"))]
-    return (found + extra)[:3] or preferred
-
-
-def call_groq_vision(img_bytes: bytes, groq_key: str) -> str:
-    """OPTIONAL free fallback; only used if GROQ_API_KEY is set and Gemini is unavailable."""
-    b64 = base64.b64encode(img_bytes).decode("utf-8")
-    last = ""
-    for model in groq_vision_models(groq_key):
-        try:
-            res = requests.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
-                json={"model": model, "temperature": 0.2, "max_tokens": 500,
-                      "messages": [{"role": "user", "content": [
-                          {"type": "text", "text": PROMPT},
-                          {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}]}]},
-                timeout=15,
-            )
-            if res.ok:
-                return res.json()["choices"][0]["message"]["content"]
-            last = f"{model}: {res.status_code} {res.text[:150]}"
-        except Exception as e:
-            last = f"{model}: {e}"
-    raise RuntimeError(f"No Groq vision model worked ({last})")
-
-
-def stream_analysis(client, img_bytes: bytes, models: list, groq_key: str = ""):
+def stream_analysis(client, img_bytes: bytes, models: list, info: dict = None):
     """Yields text chunks as Gemini produces them. Retries / model switching only happen
     BEFORE the first chunk is shown; after that, errors are raised, never restarted."""
     contents = [types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"), PROMPT]
     last_error = None
     t_start = time.perf_counter()
-    budget = 8 if groq_key else TOTAL_BUDGET_S   # with a backup available, give up on Gemini sooner
+    budget = TOTAL_BUDGET_S
 
     for model in models:
         if time.perf_counter() - t_start > budget:
@@ -278,6 +238,8 @@ def stream_analysis(client, img_bytes: bytes, models: list, groq_key: str = ""):
                 ):
                     if chunk.text:
                         started = True
+                        if info is not None:
+                            info["model"] = model           # remember which model answered
                         yield chunk.text
                 if started:
                     return
@@ -303,17 +265,11 @@ def stream_analysis(client, img_bytes: bytes, models: list, groq_key: str = ""):
                 if attempt < 3:
                     time.sleep(attempt)                     # overload: wait 1 s, then 2 s
 
-    if groq_key:
-        try:
-            yield call_groq_vision(img_bytes, groq_key)
-            return
-        except Exception as ge:
-            raise RuntimeError(f"Gemini: {str(last_error)[:200]} | Groq: {str(ge)[:200]}") from ge
     if last_error is None:
         raise RuntimeError("No available Gemini model for this API key. Check Google AI Studio.")
     raise RuntimeError(
         "Gemini is busy or over its quota right now. Please try again in a moment. "
-        f"(Details: {str(last_error)[:250]})"
+        f"(Details: {str(last_error)[:250]}; google-genai {getattr(genai, '__version__', '?')})"
     ) from last_error
 
 
@@ -482,11 +438,11 @@ def speech_from_db(d: dict) -> str:
     return " ".join(parts)
 
 
-def stream_with_lookup(client, img_bytes, models, groq_key, pool, holder):
+def stream_with_lookup(client, img_bytes, models, pool, holder):
     """Streams the AI text and starts the DB lookup the moment the identity fields
     (name, brand, barcode) are complete, while Gemini keeps writing."""
     buf = ""
-    for piece in stream_analysis(client, img_bytes, models, groq_key):
+    for piece in stream_analysis(client, img_bytes, models, holder):
         if "t_first" not in holder:
             holder["t_first"] = time.perf_counter()
             if holder.get("status") is not None:
@@ -513,17 +469,12 @@ try:
 except Exception:
     api_key = None
 
-try:
-    groq_key = st.secrets.get("GROQ_API_KEY", "")   # optional, leave unset to disable
-except Exception:
-    groq_key = ""
-
 if not api_key:
     st.error("System Error: GEMINI_API_KEY is not configured in Streamlit Secrets.")
 elif str(api_key).startswith("gsk_"):
     st.error("GEMINI_API_KEY contains a Groq key (starts with gsk_). Create a Gemini key at aistudio.google.com/apikey.")
 else:
-    client = get_client(api_key, 10000 if groq_key else 25000)
+    client = get_client(api_key)
 
     st.markdown("### Smart Package Scanner & Hybrid Analyzer")
     st.markdown("Capture the snack package. AI vision identifies the product, then our system pulls verified nutrition data from the Open Food Facts database. If the product is not found, the AI analysis is used.")
@@ -553,7 +504,7 @@ else:
                 st.markdown(full_text)
             else:
                 full_text = st.write_stream(
-                    stream_with_lookup(client, img_bytes, models, groq_key, pool, holder)
+                    stream_with_lookup(client, img_bytes, models, pool, holder)
                 )
                 if not isinstance(full_text, str):
                     full_text = "".join(str(x) for x in full_text)
@@ -598,7 +549,8 @@ else:
             first = f"first word {holder['t_first'] - t0:.1f}s · " if "t_first" in holder else "cached · "
             st.caption(
                 f"⏱ {first}AI total {t_stream - t0:.1f}s · "
-                f"database wait {t_db - t_stream:.1f}s · audio {t_audio - t_db:.1f}s"
+                f"database wait {t_db - t_stream:.1f}s · audio {t_audio - t_db:.1f}s · "
+                f"model {holder.get('model', 'cached')} · google-genai {getattr(genai, '__version__', '?')}"
             )
 
             if audio_b64:
